@@ -6,8 +6,13 @@ const now = () => new Date().toISOString();
 const daysAgo = (d, m = 0) => new Date(Date.now() - d * 86400000 + m * 60000).toISOString();
 
 async function main() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    console.error('ERROR: DATABASE_URL environment variable is not set.');
+    process.exit(1);
+  }
   const client = new Client({
-    connectionString: 'postgresql://neondb_owner:npg_GzBkbE6YC2jH@ep-mute-wildflower-aov505bx.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
+    connectionString,
   });
 
   await client.connect();
