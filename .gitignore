@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.output/
+.vercel/
+.nitro/
+.vinxi/
+.cache/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+Backend/crm/src/generated/
+Frontend/src/routeTree.gen.ts
