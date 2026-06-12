@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, Sse, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Sse, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import {
   IsOptional,
@@ -18,6 +18,12 @@ class CreateConversationDto {
   @IsString()
   @MaxLength(100)
   title?: string;
+}
+
+class RenameConversationDto {
+  @IsString()
+  @Length(1, 100)
+  title!: string;
 }
 
 class SendMessageDto {
@@ -47,6 +53,20 @@ export class AIController {
   @Get("conversations/:id")
   get(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
     return this.ai.getConversation(id, req.user.id);
+  }
+
+  @Patch("conversations/:id")
+  rename(
+    @Req() req: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() input: RenameConversationDto
+  ) {
+    return this.ai.renameConversation(id, req.user.id, input.title);
+  }
+
+  @Delete("conversations/:id")
+  delete(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+    return this.ai.deleteConversation(id, req.user.id);
   }
 
   @Post("conversations/:id/messages")
@@ -102,7 +122,7 @@ export class AIController {
           subscriber.complete();
         }
       };
-      run();
+      void run();
     });
   }
 }

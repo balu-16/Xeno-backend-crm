@@ -20,8 +20,8 @@ const envSchema = z.object({
   REDIS_TLS: booleanString,
   CHANNEL_WEBHOOK_SECRET: z.string().min(32),
   CHANNEL_SERVICE_URL: z.string().url().optional(),
-  ANTHROPIC_BASE_URL: z.string().url().optional(),
-  XIAOMI_AUTH_TOKEN: z.string().optional(),
+  ANTHROPIC_BASE_URL: z.string().url(),
+  XIAOMI_AUTH_TOKEN: z.string().min(1),
   XIAOMI_MODEL: z.string().default("mimo-v2.5-pro"),
   SEED_ADMIN_EMAIL: z.string().email().default("admin@xeno.local"),
   SEED_ADMIN_PASSWORD: z.string().min(8)

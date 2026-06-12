@@ -232,7 +232,7 @@ export class AIToolsService {
         output: await this.segments.get(String(input.id)),
         sources: [`Segment:${String(input.id)}`, "Customer", "Order"]
       })),
-      this.define("createSegment", "Create a segment from validated rule JSON.", objectSchema({
+      this.define("createSegment", "Create a customer segment. Requires a name and rules object with {operator:'AND'|'OR', conditions:[{field, operator, value}]}. Available fields: totalSpent (number), orderCount (number), daysSinceLastOrder (number), city (string), emailEngagement (string). If the user hasn't provided all required info, ask them for it first rather than guessing. Use generateSegmentRules to convert natural language descriptions into valid rule JSON.", objectSchema({
         name: stringSchema("Segment name"),
         description: stringSchema("Segment description"),
         rules: ruleJsonSchema
@@ -460,7 +460,7 @@ export class AIToolsService {
           sources: [`Campaign:${campaign.id}`, "CampaignAnalytics", "CampaignEvent"]
         };
       }),
-      this.define("generateSegmentRules", "Generate validated segment rules from natural language.", objectSchema({
+      this.define("generateSegmentRules", "Convert a natural-language audience description into validated segment rules JSON. Use this BEFORE calling createSegment when the user describes their audience in plain English (e.g. 'customers who spent over $500 and live in Mumbai'). Returns rules and estimated audience size.", objectSchema({
         prompt: stringSchema("Natural-language audience description")
       }, ["prompt"]), false, promptSchema, async (input) => this.generateSegmentRules(String(input.prompt))),
       this.define("generateCampaignMessage", "Draft campaign copy from a brief.", objectSchema({
