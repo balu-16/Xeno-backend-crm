@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import type { PaginationQuery, SegmentRuleGroup } from "../contracts";
 import { toInputJson } from "../common/json";
 import { PrismaService } from "../prisma/prisma.service";
@@ -83,14 +83,73 @@ export class SegmentsService {
     return this.compiler.validate(segment.rules);
   }
 
-  async updateName(id: string, name: string) {
+  async get(id: string) {
     const segment = await this.prisma.segment.findUnique({ where: { id } });
     if (!segment) {
       throw new NotFoundException("Segment not found");
     }
-    return this.prisma.segment.update({
+    const rules = this.compiler.validate(segment.rules);
+    return {
+      ...segment,
+      rules,
+      audienceSize: await this.compiler.count(rules)
+    };
+  }
+
+  async update(id: string, input: {
+    name?: string;
+    description?: string | null;
+    rules?: unknown;
+  }) {
+    const segment = await this.prisma.segment.findUnique({ where: { id } });
+    if (!segment) {
+      throw new NotFoundException("Segment not found");
+    }
+    const rules = input.rules === undefined
+      ? undefined
+      : this.compiler.validate(input.rules);
+    const updated = await this.prisma.segment.update({
       where: { id },
-      data: { name },
+      data: {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.description !== undefined
+          ? { description: input.description }
+          : {}),
+        ...(rules !== undefined ? { rules: toInputJson(rules) } : {})
+      }
     });
+    const effectiveRules = rules ?? this.compiler.validate(updated.rules);
+    return {
+      ...updated,
+      rules: effectiveRules,
+      audienceSize: await this.compiler.count(effectiveRules)
+    };
+  }
+
+  async updateName(id: string, name: string) {
+    return this.update(id, { name });
+  }
+
+  async countCustomers(id: string) {
+    const rules = await this.getRules(id);
+    return { segmentId: id, audienceSize: await this.compiler.count(rules) };
+  }
+
+  async remove(id: string) {
+    const segment = await this.prisma.segment.findUnique({ where: { id } });
+    if (!segment) {
+      throw new NotFoundException("Segment not found");
+    }
+    // Check if any campaigns reference this segment
+    const campaignCount = await this.prisma.campaign.count({
+      where: { segmentId: id }
+    });
+    if (campaignCount > 0) {
+      throw new ConflictException(
+        `Cannot delete segment: ${campaignCount} campaign(s) reference it`
+      );
+    }
+    await this.prisma.segment.delete({ where: { id } });
+    return { deleted: true, id };
   }
 }

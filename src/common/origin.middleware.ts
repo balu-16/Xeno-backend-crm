@@ -23,9 +23,12 @@ export class OriginMiddleware implements NestMiddleware {
     const production =
       this.config.get("NODE_ENV", { infer: true }) === "production";
     const expected = this.config.get("FRONTEND_URL", { infer: true });
-    if (production && origin !== expected) {
-      throw new ForbiddenException("Request origin is not allowed");
+
+    // In production, reject requests without an Origin header (fail-closed)
+    if (production && !origin) {
+      throw new ForbiddenException("Origin header is required");
     }
+    // If Origin is present, it must match the expected frontend URL
     if (origin && origin !== expected) {
       throw new ForbiddenException("Request origin is not allowed");
     }

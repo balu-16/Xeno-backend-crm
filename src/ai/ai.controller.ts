@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Req, Sse, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import {
   IsOptional,
@@ -6,6 +6,11 @@ import {
   Length,
   MaxLength
 } from "class-validator";
+import { Observable, Subscriber } from "rxjs";
+import type { AuthenticatedRequest } from "../auth/auth.guard";
+import { AuthGuard } from "../auth/auth.guard";
+import { Roles } from "../auth/roles.decorator";
+import { RolesGuard } from "../auth/roles.guard";
 import { AIService } from "./ai.service";
 
 class CreateConversationDto {
@@ -22,35 +27,82 @@ class SendMessageDto {
 }
 
 @Controller("ai")
+@UseGuards(AuthGuard, RolesGuard)
 @Throttle({ default: { limit: 20, ttl: 60000 } })
 export class AIController {
-  constructor(private readonly ai: AIService) {}
+  constructor(
+    private readonly ai: AIService
+  ) {}
 
   @Get("conversations")
-  list() {
-    return this.ai.listConversations();
+  list(@Req() req: AuthenticatedRequest) {
+    return this.ai.listConversations(req.user.id);
   }
 
   @Post("conversations")
-  create(@Body() input: CreateConversationDto) {
-    return this.ai.createConversation(input.title);
+  create(@Req() req: AuthenticatedRequest, @Body() input: CreateConversationDto) {
+    return this.ai.createConversation(req.user.id, input.title);
   }
 
   @Get("conversations/:id")
-  get(@Param("id") id: string) {
-    return this.ai.getConversation(id);
+  get(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+    return this.ai.getConversation(id, req.user.id);
   }
 
   @Post("conversations/:id/messages")
   send(
+    @Req() req: AuthenticatedRequest,
     @Param("id") id: string,
     @Body() input: SendMessageDto
   ) {
-    return this.ai.sendMessage(id, input.content);
+    return this.ai.sendMessage(id, input.content, req.user);
   }
 
   @Get("request-log")
+  @Roles("ADMIN")
   getRequestLog() {
     return this.ai.getRequestLog();
+  }
+
+  @Get("guardrails")
+  @Roles("ADMIN")
+  getGuardrails() {
+    return this.ai.getGuardrails();
+  }
+
+  @Get("conversations/:id/stream")
+  @Sse()
+  stream(
+    @Req() req: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Query("content") content: string
+  ): Observable<{ data: string }> {
+    return new Observable<{ data: string }>((subscriber: Subscriber<{ data: string }>) => {
+      const run = async () => {
+        try {
+          const generator = this.ai.streamMessage(id, content, req.user);
+          for await (const event of generator) {
+            if (subscriber.closed) break;
+            subscriber.next(event);
+          }
+        } catch (error) {
+          subscriber.next({
+            data: JSON.stringify({
+              type: "done",
+              toolResult: null,
+              grounding: {
+                tool: null,
+                sources: [],
+                executionId: null,
+                error: error instanceof Error ? error.message : String(error)
+              }
+            })
+          });
+        } finally {
+          subscriber.complete();
+        }
+      };
+      run();
+    });
   }
 }

@@ -1,4 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { AuthGuard } from "../auth/auth.guard";
+import { Roles } from "../auth/roles.decorator";
+import { RolesGuard } from "../auth/roles.guard";
 import { paginationQuerySchema } from "../contracts";
 import {
   IsObject,
@@ -24,9 +27,19 @@ class CreateSegmentDto {
 }
 
 class UpdateSegmentNameDto {
+  @IsOptional()
   @IsString()
   @Length(2, 120)
-  name!: string;
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsObject()
+  rules?: Record<string, unknown>;
 }
 
 class PreviewSegmentDto {
@@ -35,6 +48,7 @@ class PreviewSegmentDto {
 }
 
 @Controller("segments")
+@UseGuards(AuthGuard, RolesGuard)
 export class SegmentsController {
   constructor(private readonly segments: SegmentsService) {}
 
@@ -44,6 +58,7 @@ export class SegmentsController {
   }
 
   @Post()
+  @Roles("ADMIN", "MANAGER")
   create(@Body() input: CreateSegmentDto) {
     return this.segments.create(input);
   }
@@ -61,8 +76,25 @@ export class SegmentsController {
     );
   }
 
+  @Get(":id")
+  get(@Param("id") id: string) {
+    return this.segments.get(id);
+  }
+
+  @Get(":id/customer-count")
+  countCustomers(@Param("id") id: string) {
+    return this.segments.countCustomers(id);
+  }
+
   @Patch(":id")
-  updateName(@Param("id") id: string, @Body() input: UpdateSegmentNameDto) {
-    return this.segments.updateName(id, input.name);
+  @Roles("ADMIN", "MANAGER")
+  update(@Param("id") id: string, @Body() input: UpdateSegmentNameDto) {
+    return this.segments.update(id, input);
+  }
+
+  @Delete(":id")
+  @Roles("ADMIN")
+  remove(@Param("id") id: string) {
+    return this.segments.remove(id);
   }
 }

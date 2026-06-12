@@ -50,8 +50,13 @@ export class SegmentCompilerService {
         return Prisma.sql`${column} = ${condition.value}`;
       case "!=":
         return Prisma.sql`${column} != ${condition.value}`;
-      case "contains":
-        return Prisma.sql`${column} ILIKE ${`%${String(condition.value)}%`}`;
+      case "contains": {
+        const escaped = String(condition.value)
+          .replace(/\\/g, "\\\\")
+          .replace(/%/g, "\\%")
+          .replace(/_/g, "\\_");
+        return Prisma.sql`${column} ILIKE ${`%${escaped}%`}`;
+      }
     }
   }
 
@@ -85,7 +90,7 @@ export class SegmentCompilerService {
           COALESCE(SUM(o.amount), 0)::double precision AS "totalSpent",
           COUNT(o.id)::integer AS "orderCount",
           COALESCE(
-            EXTRACT(DAY FROM NOW() - MAX(o."createdAt")),
+            EXTRACT(EPOCH FROM (NOW() - MAX(o."createdAt"))) / 86400,
             99999
           )::double precision AS "daysSinceLastOrder",
           COALESCE(c.metadata->>'city', '') AS city,
@@ -121,7 +126,7 @@ export class SegmentCompilerService {
           COALESCE(SUM(o.amount), 0)::double precision AS "totalSpent",
           COUNT(o.id)::integer AS "orderCount",
           COALESCE(
-            EXTRACT(DAY FROM NOW() - MAX(o."createdAt")),
+            EXTRACT(EPOCH FROM (NOW() - MAX(o."createdAt"))) / 86400,
             99999
           )::double precision AS "daysSinceLastOrder",
           COALESCE(c.metadata->>'city', '') AS city,

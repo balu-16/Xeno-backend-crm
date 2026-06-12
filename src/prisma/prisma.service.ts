@@ -11,6 +11,7 @@ export class PrismaService
       await this.$connect();
     } catch (error) {
       console.error("Database connection unavailable during startup", error);
+      throw error; // Fail fast — don't start if DB is unreachable
     }
   }
 

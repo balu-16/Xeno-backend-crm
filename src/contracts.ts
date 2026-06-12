@@ -7,6 +7,7 @@ export const campaignStatusSchema = z.enum([
   "DRAFT",
   "QUEUED",
   "RUNNING",
+  "PAUSED",
   "COMPLETED",
   "FAILED"
 ]);
@@ -240,6 +241,31 @@ export type CampaignPerformance = {
 };
 
 export const aiToolNameSchema = z.enum([
+  "getCustomers",
+  "getCustomerById",
+  "getCustomerByEmail",
+  "createCustomer",
+  "updateCustomer",
+  "deleteCustomer",
+  "getSegments",
+  "getSegment",
+  "createSegment",
+  "updateSegment",
+  "deleteSegment",
+  "getSegmentCustomerCount",
+  "getCampaigns",
+  "getCampaign",
+  "createCampaign",
+  "launchCampaign",
+  "pauseCampaign",
+  "deleteCampaign",
+  "getCampaignAnalytics",
+  "getSegmentAnalytics",
+  "getRevenueAnalytics",
+  "getDeliveryAnalytics",
+  "sendCampaign",
+  "retryCampaign",
+  "simulateDelivery",
   "getDashboardMetrics",
   "getCampaignPerformance",
   "generateSegmentRules",
@@ -248,7 +274,9 @@ export const aiToolNameSchema = z.enum([
   "diagnoseCampaignFailure",
   "listSegments",
   "listCampaigns",
-  "getCustomerStats"
+  "getCustomerStats",
+  "getBestSendTime",
+  "suggestABTest"
 ]);
 export type AIToolName = z.infer<typeof aiToolNameSchema>;
 

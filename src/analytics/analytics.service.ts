@@ -412,4 +412,161 @@ export class AnalyticsService {
     ]);
     return { dashboard, campaigns };
   }
+
+  async getSegmentAnalytics(segmentId?: string) {
+    const rows = await this.prisma.$queryRaw<Array<{
+      segmentId: string;
+      segment: string;
+      campaigns: bigint;
+      audience: bigint;
+      sent: bigint;
+      delivered: bigint;
+      opened: bigint;
+      clicked: bigint;
+      converted: bigint;
+      revenue: Prisma.Decimal;
+    }>>(Prisma.sql`
+      SELECT
+        s.id AS "segmentId",
+        s.name AS segment,
+        COUNT(DISTINCT c.id)::bigint AS campaigns,
+        COALESCE(SUM(a."totalAudience"), 0)::bigint AS audience,
+        COALESCE(SUM(a."totalSent"), 0)::bigint AS sent,
+        COALESCE(SUM(a."totalDelivered"), 0)::bigint AS delivered,
+        COALESCE(SUM(a."totalOpened"), 0)::bigint AS opened,
+        COALESCE(SUM(a."totalClicked"), 0)::bigint AS clicked,
+        COALESCE(SUM(a."totalConverted"), 0)::bigint AS converted,
+        COALESCE(SUM(a."revenueAccrued"), 0) AS revenue
+      FROM "Segment" s
+      LEFT JOIN "Campaign" c ON c."segmentId" = s.id
+      LEFT JOIN "CampaignAnalytics" a ON a."campaignId" = c.id
+      ${segmentId ? Prisma.sql`WHERE s.id = ${segmentId}` : Prisma.empty}
+      GROUP BY s.id, s.name
+      ORDER BY revenue DESC, converted DESC, segment ASC
+    `);
+    return rows.map((row) => ({
+      segmentId: row.segmentId,
+      segment: row.segment,
+      campaigns: Number(row.campaigns),
+      audience: Number(row.audience),
+      sent: Number(row.sent),
+      delivered: Number(row.delivered),
+      opened: Number(row.opened),
+      clicked: Number(row.clicked),
+      converted: Number(row.converted),
+      revenue: Number(row.revenue),
+      deliveryRate: rate(Number(row.delivered), Number(row.sent)),
+      openRate: rate(Number(row.opened), Number(row.delivered)),
+      clickRate: rate(Number(row.clicked), Number(row.opened)),
+      conversionRate: rate(Number(row.converted), Number(row.clicked))
+    }));
+  }
+
+  async getRevenueAnalytics() {
+    const [summary, byCampaign, bySegment, trend] = await Promise.all([
+      this.prisma.order.aggregate({ _sum: { amount: true }, _count: true }),
+      this.prisma.campaign.findMany({
+        include: { analytics: true, segment: { select: { name: true } } },
+        orderBy: { analytics: { revenueAccrued: "desc" } },
+        take: 10
+      }),
+      this.getSegmentAnalytics(),
+      this.prisma.$queryRaw<Array<{ date: Date; revenue: Prisma.Decimal }>>(
+        Prisma.sql`
+          SELECT DATE_TRUNC('day', "createdAt") AS date, SUM(amount) AS revenue
+          FROM "Order"
+          WHERE "createdAt" >= NOW() - INTERVAL '30 days'
+          GROUP BY 1
+          ORDER BY 1
+        `
+      )
+    ]);
+    return {
+      totalRevenue: Number(summary._sum.amount ?? 0),
+      totalOrders: summary._count,
+      topCampaigns: byCampaign.map((campaign) => ({
+        id: campaign.id,
+        name: campaign.name,
+        segment: campaign.segment.name,
+        revenue: campaign.analytics ? Number(campaign.analytics.revenueAccrued) : 0
+      })),
+      topSegments: bySegment.slice(0, 10).map((segment) => ({
+        segmentId: segment.segmentId,
+        segment: segment.segment,
+        revenue: segment.revenue,
+        converted: segment.converted
+      })),
+      trend: trend.map((row) => ({
+        date: row.date.toISOString(),
+        revenue: Number(row.revenue)
+      }))
+    };
+  }
+
+  async getDeliveryAnalytics() {
+    const [analytics, failures, channelRows] = await Promise.all([
+      this.prisma.campaignAnalytics.aggregate({
+        _sum: {
+          totalSent: true,
+          totalDelivered: true,
+          totalOpened: true,
+          totalClicked: true,
+          totalConverted: true,
+          totalFailed: true
+        }
+      }),
+      this.prisma.campaignLog.groupBy({
+        by: ["failureReason"],
+        where: { status: "FAILED" },
+        _count: true,
+        orderBy: { _count: { failureReason: "desc" } },
+        take: 10
+      }),
+      this.prisma.$queryRaw<Array<{
+        channel: Channel;
+        sent: bigint;
+        delivered: bigint;
+        failed: bigint;
+      }>>(Prisma.sql`
+        SELECT
+          c.channel,
+          COALESCE(SUM(a."totalSent"), 0)::bigint AS sent,
+          COALESCE(SUM(a."totalDelivered"), 0)::bigint AS delivered,
+          COALESCE(SUM(a."totalFailed"), 0)::bigint AS failed
+        FROM "Campaign" c
+        LEFT JOIN "CampaignAnalytics" a ON a."campaignId" = c.id
+        GROUP BY c.channel
+        ORDER BY c.channel
+      `)
+    ]);
+    const sent = analytics._sum.totalSent ?? 0;
+    const delivered = analytics._sum.totalDelivered ?? 0;
+    const opened = analytics._sum.totalOpened ?? 0;
+    const clicked = analytics._sum.totalClicked ?? 0;
+    const converted = analytics._sum.totalConverted ?? 0;
+    const failed = analytics._sum.totalFailed ?? 0;
+    return {
+      sent,
+      delivered,
+      opened,
+      clicked,
+      converted,
+      failed,
+      deliveryRate: rate(delivered, sent),
+      openRate: rate(opened, delivered),
+      clickRate: rate(clicked, opened),
+      conversionRate: rate(converted, clicked),
+      failureReasons: failures.map((failure) => ({
+        reason: failure.failureReason ?? "Unknown delivery failure",
+        count: failure._count
+      })),
+      channels: channelRows.map((row) => ({
+        channel: row.channel,
+        sent: Number(row.sent),
+        delivered: Number(row.delivered),
+        failed: Number(row.failed),
+        deliveryRate: rate(Number(row.delivered), Number(row.sent))
+      }))
+    };
+  }
 }

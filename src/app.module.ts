@@ -31,6 +31,8 @@ import { QueueModule } from "./queue/queue.module";
 import { SegmentsModule } from "./segments/segments.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 
+const isDev = process.env.NODE_ENV !== "production";
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -50,7 +52,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     MonitorModule,
     WebhooksModule,
     HealthModule,
-    DevModule
+    ...(isDev ? [DevModule] : [])
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

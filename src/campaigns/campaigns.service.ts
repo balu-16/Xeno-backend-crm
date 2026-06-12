@@ -73,6 +73,7 @@ export class CampaignsService {
     channel: string;
     subject?: string;
     message: string;
+    scheduledAt?: string;
   }) {
     const channel = channelSchema.parse(input.channel);
     const segment = await this.prisma.segment.findUnique({
@@ -80,6 +81,10 @@ export class CampaignsService {
     });
     if (!segment) {
       throw new NotFoundException("Segment not found");
+    }
+    const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
+    if (scheduledAt && scheduledAt <= new Date()) {
+      throw new ConflictException("Scheduled time must be in the future");
     }
     const correlationId = randomUUID();
     return this.prisma.$transaction(async (transaction) => {
@@ -89,7 +94,8 @@ export class CampaignsService {
           segmentId: input.segmentId,
           channel,
           subject: input.subject,
-          message: input.message
+          message: input.message,
+          scheduledAt
         }
       });
       await transaction.campaignEvent.create({
@@ -129,6 +135,7 @@ export class CampaignsService {
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
     }
+    // Atomic status check + update inside transaction to prevent TOCTOU race
     if (campaign.status !== CampaignStatus.DRAFT) {
       throw new ConflictException("Only draft campaigns can be launched");
     }
@@ -141,14 +148,18 @@ export class CampaignsService {
     const correlationId = randomUUID();
     const occurredAt = new Date();
     await this.prisma.$transaction(async (transaction) => {
-      await transaction.campaign.update({
-        where: { id },
+      // Atomic conditional update — only succeeds if still DRAFT
+      const updated = await transaction.campaign.updateMany({
+        where: { id, status: CampaignStatus.DRAFT },
         data: {
           status: CampaignStatus.QUEUED,
           audienceSizeSnapshot: audience.length,
           launchedAt: occurredAt
         }
       });
+      if (updated.count === 0) {
+        throw new ConflictException("Campaign was already launched by another request");
+      }
       await transaction.campaignEvent.create({
         data: {
           eventId: randomUUID(),
@@ -206,6 +217,11 @@ export class CampaignsService {
           where: { id },
           data: { status: CampaignStatus.FAILED }
         }),
+        // Mark all QUEUED log entries as FAILED so analytics don't show ghost pending
+        this.prisma.campaignLog.updateMany({
+          where: { campaignId: id, status: DeliveryStatus.QUEUED },
+          data: { status: DeliveryStatus.FAILED, lastEventAt: new Date() }
+        }),
         this.prisma.processingFailure.create({
           data: {
             queue: "campaign-dispatch",
@@ -249,5 +265,216 @@ export class CampaignsService {
         count: failure._count
       }))
     };
+  }
+
+  async remove(id: string) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: { id }
+    });
+    if (!campaign) {
+      throw new NotFoundException("Campaign not found");
+    }
+    if (campaign.status === CampaignStatus.RUNNING || campaign.status === CampaignStatus.QUEUED) {
+      throw new ConflictException("Cannot delete a running or queued campaign");
+    }
+    await this.prisma.campaign.delete({ where: { id } });
+    return { deleted: true, id };
+  }
+
+  async pause(id: string) {
+    const campaign = await this.prisma.campaign.findUnique({ where: { id } });
+    if (!campaign) {
+      throw new NotFoundException("Campaign not found");
+    }
+    if (campaign.status !== CampaignStatus.RUNNING && campaign.status !== CampaignStatus.QUEUED) {
+      throw new ConflictException("Only running or queued campaigns can be paused");
+    }
+    return this.prisma.campaign.update({
+      where: { id },
+      data: { status: CampaignStatus.PAUSED }
+    });
+  }
+
+  async retryFailed(id: string) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: { id },
+      include: { segment: true }
+    });
+    if (!campaign) {
+      throw new NotFoundException("Campaign not found");
+    }
+    const failedLogs = await this.prisma.campaignLog.findMany({
+      where: { campaignId: id, status: DeliveryStatus.FAILED },
+      include: { customer: true },
+      take: 10000
+    });
+    if (failedLogs.length === 0) {
+      return { campaignId: id, retried: 0, correlationId: null };
+    }
+    const correlationId = randomUUID();
+    await this.prisma.$transaction([
+      this.prisma.campaign.update({
+        where: { id },
+        data: { status: CampaignStatus.RUNNING }
+      }),
+      this.prisma.campaignEvent.createMany({
+        data: failedLogs.map((log) => ({
+          eventId: randomUUID(),
+          type: CampaignEventType.MessageQueued,
+          campaignId: id,
+          customerId: log.customerId,
+          correlationId,
+          payload: toInputJson({ retry: true, channel: campaign.channel }),
+          occurredAt: new Date()
+        }))
+      }),
+      this.prisma.campaignLog.updateMany({
+        where: { campaignId: id, status: DeliveryStatus.FAILED },
+        data: {
+          status: DeliveryStatus.QUEUED,
+          failureReason: null,
+          lastEventAt: new Date()
+        }
+      })
+    ]);
+    const jobs: CampaignDispatchJob[] = failedLogs.map((log) => ({
+      campaignId: id,
+      customerId: log.customerId,
+      channel: campaign.channel,
+      destination:
+        campaign.channel === ChannelType.EMAIL
+          ? log.customer.email
+          : log.customer.phone,
+      subject: campaign.subject,
+      message: campaign.message,
+      correlationId
+    }));
+    await this.queues.addDispatchJobs(jobs);
+    return { campaignId: id, retried: failedLogs.length, correlationId };
+  }
+
+  async simulateDelivery(
+    campaignId: string,
+    customerId: string,
+    type: Exclude<
+      keyof typeof CampaignEventType,
+      "CampaignCreated" | "CampaignLaunched" | "MessageQueued"
+    >,
+    payload: Record<string, unknown> = {}
+  ) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: { id: campaignId }
+    });
+    if (!campaign) {
+      throw new NotFoundException("Campaign not found");
+    }
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId }
+    });
+    if (!customer) {
+      throw new NotFoundException("Customer not found");
+    }
+    const eventType = CampaignEventType[type];
+    if (!eventType) {
+      throw new ConflictException("Unsupported simulated delivery event");
+    }
+    const statusByEvent: Partial<Record<CampaignEventType, DeliveryStatus>> = {
+      [CampaignEventType.MessageSent]: DeliveryStatus.SENT,
+      [CampaignEventType.MessageDelivered]: DeliveryStatus.DELIVERED,
+      [CampaignEventType.MessageOpened]: DeliveryStatus.OPENED,
+      [CampaignEventType.MessageClicked]: DeliveryStatus.CLICKED,
+      [CampaignEventType.MessageConverted]: DeliveryStatus.CONVERTED,
+      [CampaignEventType.MessageFailed]: DeliveryStatus.FAILED
+    };
+    const occurredAt = new Date();
+    const correlationId = randomUUID();
+    const result = await this.prisma.$transaction(async (transaction) => {
+      let attributedOrderId: string | undefined;
+      if (eventType === CampaignEventType.MessageConverted) {
+        const amountValue = payload.orderAmount;
+        const amount =
+          typeof amountValue === "number" && Number.isFinite(amountValue)
+            ? Math.max(1, amountValue)
+            : 75;
+        const order = await transaction.order.create({
+          data: {
+            customerId,
+            amount,
+            items: toInputJson([{ sku: "AI-SIMULATED-CONVERSION", quantity: 1 }]),
+            createdAt: occurredAt
+          }
+        });
+        attributedOrderId = order.id;
+      }
+      const event = await transaction.campaignEvent.create({
+        data: {
+          eventId: randomUUID(),
+          type: eventType,
+          campaignId,
+          customerId,
+          attributedOrderId,
+          correlationId,
+          payload: toInputJson({ ...payload, simulatedBy: "ai-tool" }),
+          occurredAt
+        }
+      });
+      const status = statusByEvent[eventType];
+      if (status) {
+        await transaction.campaignLog.upsert({
+          where: { campaignId_customerId: { campaignId, customerId } },
+          create: {
+            campaignId,
+            customerId,
+            status,
+            failureReason:
+              status === DeliveryStatus.FAILED
+                ? String(payload.reason ?? "Simulated failure")
+                : null,
+            attributedOrderId,
+            lastEventAt: occurredAt
+          },
+          update: {
+            status,
+            failureReason:
+              status === DeliveryStatus.FAILED
+                ? String(payload.reason ?? "Simulated failure")
+                : null,
+            ...(attributedOrderId ? { attributedOrderId } : {}),
+            lastEventAt: occurredAt
+          }
+        });
+      }
+      return event;
+    });
+    await this.queues.addAnalyticsJob({ campaignId, correlationId });
+    return { campaignId, customerId, event: result.type, eventId: result.id, correlationId };
+  }
+
+  /** Launch all campaigns whose scheduledAt has passed */
+  async launchScheduled(): Promise<Array<{ campaignId: string; audienceSize: number }>> {
+    const now = new Date();
+    const scheduled = await this.prisma.campaign.findMany({
+      where: {
+        status: CampaignStatus.DRAFT,
+        scheduledAt: { lte: now }
+      },
+      take: 10
+    });
+    const results: Array<{ campaignId: string; audienceSize: number }> = [];
+    for (const campaign of scheduled) {
+      try {
+        const result = await this.launch(campaign.id);
+        results.push(result);
+      } catch (error) {
+        await this.prisma.processingFailure.create({
+          data: {
+            queue: "scheduled-launch",
+            reason: error instanceof Error ? error.message : String(error),
+            diagnostics: toInputJson({ campaignId: campaign.id })
+          }
+        }).catch(() => {});
+      }
+    }
+    return results;
   }
 }

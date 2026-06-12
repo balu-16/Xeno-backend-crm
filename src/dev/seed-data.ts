@@ -145,7 +145,7 @@ export async function seedDatabase(
   campaigns: number;
   campaignEvents: number;
 }> {
-  await prisma.$executeRaw`TRUNCATE TABLE "ProcessingFailure", "AIToolExecution", "AIMessage", "AIConversation", "WebhookReceipt", "CampaignEvent", "CampaignLog", "CampaignAnalytics", "Campaign", "Segment", "Order", "Customer", "User", "CustomerLoginLog", "AdminLoginLog" CASCADE`;
+  await prisma.$executeRaw`TRUNCATE TABLE "ProcessingFailure", "AIToolExecution", "AIMessage", "AIConversation", "WebhookReceipt", "CampaignEvent", "CampaignLog", "CampaignAnalytics", "Campaign", "Segment", "Order", "Customer", "User", "CustomerLoginLog", "AdminLoginLog", "EmailVerification", "RefreshToken" CASCADE`;
 
   await prisma.user.create({
     data: {
@@ -156,16 +156,23 @@ export async function seedDatabase(
     }
   });
 
+  const tagOptions = ["vip", "inactive", "loyal", "new", "high-value", "frequent", "win-back", "engaged"];
   const customers = Array.from({ length: 1000 }, (_, index) => {
     const first = firstNames[index % firstNames.length] ?? "Xeno";
     const last =
       lastNames[Math.floor(index / firstNames.length) % lastNames.length] ??
       "Customer";
+    // Assign 1-3 tags deterministically
+    const customerTags: string[] = [];
+    customerTags.push(tagOptions[index % tagOptions.length]!);
+    if (index % 3 === 0) customerTags.push(tagOptions[(index + 2) % tagOptions.length]!);
+    if (index % 5 === 0) customerTags.push(tagOptions[(index + 4) % tagOptions.length]!);
     return {
       id: randomUUID(),
       name: `${first} ${last} ${index + 1}`,
       email: `shopper${String(index + 1).padStart(4, "0")}@example.com`,
       phone: `+91${String(7000000000 + index).padStart(10, "0")}`,
+      tags: customerTags,
       metadata: toInputJson({
         city: cities[index % cities.length],
         emailEngagement: (index * 17) % 101,
