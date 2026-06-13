@@ -20,7 +20,10 @@ async function createApp() {
   );
 
   app.setGlobalPrefix("api/v1");
-  app.use(helmet());
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+  }));
   app.use(cookieParser());
 
   // Cache-Control headers to prevent browser caching of authenticated pages
@@ -35,8 +38,20 @@ async function createApp() {
     next();
   });
 
+  const frontendUrl = process.env.FRONTEND_URL;
+  const allowedOrigins = [
+    frontendUrl,
+    "https://xeno-frontend-kappa.vercel.app",
+    "http://localhost:5173",
+  ].filter(Boolean) as string[];
+
   app.enableCors({
-    origin: process.env.FRONTEND_URL || "*",
+    origin: (origin, callback) => {
+      // Allow requests with no origin (server-to-server, curl, same-origin SSR)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
