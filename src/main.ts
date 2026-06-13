@@ -59,10 +59,7 @@ async function bootstrap(): Promise<void> {
   await app.listen(config.get("CRM_PORT", { infer: true }));
 }
 
-// Export for Vercel serverless — bootstrap runs on cold start
-const server = bootstrap().catch((error: unknown) => {
+bootstrap().catch((error: unknown) => {
   console.error("Fatal: CRM API failed to start", error);
   process.exit(1);
 });
-
-export default server;
