@@ -9,24 +9,8 @@
   ],
   "routes": [
     {
-      "src": "/api/(.*)",
-      "methods": ["OPTIONS"],
-      "dest": "src/main.ts",
-      "headers": {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, Cookie",
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Max-Age": "86400"
-      }
-    },
-    {
       "src": "/(.*)",
-      "dest": "src/main.ts",
-      "headers": {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Credentials": "true"
-      }
+      "dest": "src/main.ts"
     }
   ]
 }
