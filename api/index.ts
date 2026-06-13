@@ -50,7 +50,7 @@ async function createApp() {
       // Allow requests with no origin (server-to-server, curl, same-origin SSR)
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
-      callback(new Error(`CORS: origin ${origin} not allowed`));
+      callback(new Error(`CORS: origin ${origin} not allowed`), false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
