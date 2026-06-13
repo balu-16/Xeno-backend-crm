@@ -1,12 +1,3 @@
-import "reflect-metadata";
-import { NestFactory } from "@nestjs/core";
-import { WorkerModule } from "./workers/worker.module";
-
-async function bootstrap(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(WorkerModule, {
-    bufferLogs: true
-  });
-  app.enableShutdownHooks();
-}
-
-void bootstrap();
+// DEPRECATED: Worker entry point removed. Redis/BullMQ has been replaced with HTTP + in-process simulation.
+// This file is kept empty to prevent import errors from stale references.
+export {};

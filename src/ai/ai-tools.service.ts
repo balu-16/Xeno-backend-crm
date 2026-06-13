@@ -3,6 +3,9 @@ import { z } from "zod";
 import {
   campaignStatusSchema,
   channelSchema,
+  insightPrioritySchema,
+  insightTypeSchema,
+  listInsightsToolSchema,
   paginationQuerySchema,
   segmentRuleGroupSchema,
   type AIToolName,
@@ -15,6 +18,7 @@ import { AIProviderService } from "./ai-provider.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { SegmentCompilerService } from "../segments/segment-compiler.service";
 import { SegmentsService } from "../segments/segments.service";
+import { InsightStoreService } from "../ai-insights/insight-store.service";
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -146,7 +150,8 @@ export class AIToolsService {
     private readonly prisma: PrismaService,
     private readonly segmentCompiler: SegmentCompilerService,
     private readonly segments: SegmentsService,
-    private readonly provider: AIProviderService
+    private readonly provider: AIProviderService,
+    private readonly insightStore: InsightStoreService
   ) {}
 
   get definitions(): AIToolDefinition[] {
@@ -205,9 +210,9 @@ export class AIToolsService {
         output: await this.customers.update(String(input.id), input),
         sources: [`Customer:${String(input.id)}`]
       })),
-      this.define("deleteCustomer", "Delete a CRM customer. Requires confirmation.", objectSchema({
+      this.define("deleteCustomer", "Delete a CRM customer.", objectSchema({
         id: stringSchema("Customer UUID", { format: "uuid" })
-      }, ["id"]), true, idSchema, async (input) => ({
+      }, ["id"]), false, idSchema, async (input) => ({
         tool: "deleteCustomer",
         input,
         output: await this.customers.remove(String(input.id)),
@@ -232,7 +237,7 @@ export class AIToolsService {
         output: await this.segments.get(String(input.id)),
         sources: [`Segment:${String(input.id)}`, "Customer", "Order"]
       })),
-      this.define("createSegment", "Create a customer segment. Requires a name and rules object with {operator:'AND'|'OR', conditions:[{field, operator, value}]}. Available fields: totalSpent (number), orderCount (number), daysSinceLastOrder (number), city (string), emailEngagement (string). If the user hasn't provided all required info, ask them for it first rather than guessing. Use generateSegmentRules to convert natural language descriptions into valid rule JSON.", objectSchema({
+      this.define("createSegment", "Create a customer segment. Requires a name and rules object with {operator:'AND'|'OR', conditions:[{field, operator, value}]}. Available fields: totalSpent (number), orderCount (number), daysSinceLastOrder (number), city (string), emailEngagement (string). If the user hasn't provided all required info, ask them for it first rather than guessing. Use generateSegmentRules to convert natural language descriptions into valid rule JSON. Description is auto-generated from rules if not provided.", objectSchema({
         name: stringSchema("Segment name"),
         description: stringSchema("Segment description"),
         rules: ruleJsonSchema
@@ -253,9 +258,9 @@ export class AIToolsService {
         output: await this.segments.update(String(input.id), input),
         sources: [`Segment:${String(input.id)}`, "Customer", "Order"]
       })),
-      this.define("deleteSegment", "Delete a segment. Requires confirmation.", objectSchema({
+      this.define("deleteSegment", "Delete a segment.", objectSchema({
         id: stringSchema("Segment UUID", { format: "uuid" })
-      }, ["id"]), true, idSchema, async (input) => ({
+      }, ["id"]), false, idSchema, async (input) => ({
         tool: "deleteSegment",
         input,
         output: await this.segments.remove(String(input.id)),
@@ -306,25 +311,25 @@ export class AIToolsService {
         output: await this.campaigns.create(input as z.infer<typeof createCampaignSchema>),
         sources: ["Campaign", "Segment"]
       })),
-      this.define("launchCampaign", "Launch a draft campaign. Requires confirmation.", objectSchema({
+      this.define("launchCampaign", "Launch a draft campaign.", objectSchema({
         id: stringSchema("Campaign UUID", { format: "uuid" })
-      }, ["id"]), true, idSchema, async (input) => ({
+      }, ["id"]), false, idSchema, async (input) => ({
         tool: "launchCampaign",
         input,
         output: await this.campaigns.launch(String(input.id)),
         sources: [`Campaign:${String(input.id)}`, "Segment", "Customer", "Queue"]
       })),
-      this.define("pauseCampaign", "Pause a running or queued campaign. Requires confirmation.", objectSchema({
+      this.define("pauseCampaign", "Pause a running or queued campaign.", objectSchema({
         id: stringSchema("Campaign UUID", { format: "uuid" })
-      }, ["id"]), true, idSchema, async (input) => ({
+      }, ["id"]), false, idSchema, async (input) => ({
         tool: "pauseCampaign",
         input,
         output: await this.campaigns.pause(String(input.id)),
         sources: [`Campaign:${String(input.id)}`]
       })),
-      this.define("deleteCampaign", "Delete a campaign. Requires confirmation.", objectSchema({
+      this.define("deleteCampaign", "Delete a campaign.", objectSchema({
         id: stringSchema("Campaign UUID", { format: "uuid" })
-      }, ["id"]), true, idSchema, async (input) => ({
+      }, ["id"]), false, idSchema, async (input) => ({
         tool: "deleteCampaign",
         input,
         output: await this.campaigns.remove(String(input.id)),
@@ -362,23 +367,15 @@ export class AIToolsService {
         sources: ["CampaignAnalytics", "CampaignLog", "CampaignEvent"]
       })),
 
-      this.define("sendCampaign", "Send/launch a campaign. Requires confirmation.", objectSchema({
+      this.define("retryCampaign", "Retry failed deliveries for a campaign.", objectSchema({
         campaignId: stringSchema("Campaign UUID", { format: "uuid" })
-      }, ["campaignId"]), true, campaignIdSchema, async (input) => ({
-        tool: "sendCampaign",
-        input,
-        output: await this.campaigns.launch(String(input.campaignId)),
-        sources: [`Campaign:${String(input.campaignId)}`, "Segment", "Customer", "Queue"]
-      })),
-      this.define("retryCampaign", "Retry failed deliveries for a campaign. Requires confirmation.", objectSchema({
-        campaignId: stringSchema("Campaign UUID", { format: "uuid" })
-      }, ["campaignId"]), true, campaignIdSchema, async (input) => ({
+      }, ["campaignId"]), false, campaignIdSchema, async (input) => ({
         tool: "retryCampaign",
         input,
         output: await this.campaigns.retryFailed(String(input.campaignId)),
         sources: [`Campaign:${String(input.campaignId)}`, "CampaignLog", "Queue"]
       })),
-      this.define("simulateDelivery", "Record a simulated delivery event. Requires confirmation.", objectSchema({
+      this.define("simulateDelivery", "Record a simulated delivery event.", objectSchema({
         campaignId: stringSchema("Campaign UUID", { format: "uuid" }),
         customerId: stringSchema("Customer UUID", { format: "uuid" }),
         type: {
@@ -393,7 +390,7 @@ export class AIToolsService {
           ]
         },
         payload: { type: "object", description: "Optional event payload" }
-      }, ["campaignId", "customerId", "type"]), true, simulateDeliverySchema, async (input) => ({
+      }, ["campaignId", "customerId", "type"]), false, simulateDeliverySchema, async (input) => ({
         tool: "simulateDelivery",
         input,
         output: await this.campaigns.simulateDelivery(
@@ -403,6 +400,23 @@ export class AIToolsService {
           (input.payload as Record<string, unknown> | undefined) ?? {}
         ),
         sources: [`Campaign:${String(input.campaignId)}`, `Customer:${String(input.customerId)}`, "CampaignEvent", "CampaignLog"]
+      })),
+
+      this.define("getInsights", "Get proactive AI-generated business insights. Use when user asks about opportunities, risks, recommendations, or business health.", objectSchema({
+        type: { type: "string", enum: insightTypeSchema.options, description: "Filter by insight type" },
+        priority: { type: "string", enum: insightPrioritySchema.options, description: "Filter by priority level" },
+        limit: numberSchema("Maximum number of insights to return", { minimum: 1, maximum: 50 })
+      }), false, listInsightsToolSchema, async (input) => ({
+        tool: "getInsights",
+        input,
+        output: await this.insightStore.list({
+          type: typeof input.type === "string" ? input.type : undefined,
+          priority: typeof input.priority === "string" ? input.priority : undefined,
+          status: "ACTIVE",
+          page: 1,
+          pageSize: typeof input.limit === "number" ? input.limit : 10
+        }),
+        sources: ["AIInsight"]
       })),
 
       this.defineLegacyTools()

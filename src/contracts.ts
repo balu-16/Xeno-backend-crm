@@ -166,12 +166,6 @@ export const receiptJobSchema = z.object({
 });
 export type ReceiptJob = z.infer<typeof receiptJobSchema>;
 
-export const analyticsRefreshJobSchema = z.object({
-  campaignId: z.string().uuid(),
-  correlationId: z.string().uuid()
-});
-export type AnalyticsRefreshJob = z.infer<typeof analyticsRefreshJobSchema>;
-
 export const channelWebhookSchema = receiptJobSchema.omit({ receiptId: true });
 export type ChannelWebhook = z.infer<typeof channelWebhookSchema>;
 
@@ -263,7 +257,6 @@ export const aiToolNameSchema = z.enum([
   "getSegmentAnalytics",
   "getRevenueAnalytics",
   "getDeliveryAnalytics",
-  "sendCampaign",
   "retryCampaign",
   "simulateDelivery",
   "getDashboardMetrics",
@@ -276,12 +269,163 @@ export const aiToolNameSchema = z.enum([
   "listCampaigns",
   "getCustomerStats",
   "getBestSendTime",
-  "suggestABTest"
+  "suggestABTest",
+  "getInsights"
 ]);
 export type AIToolName = z.infer<typeof aiToolNameSchema>;
 
-export const queueNames = {
-  campaignDispatch: "campaign-dispatch",
-  receiptProcessing: "receipt-processing",
-  analyticsRefresh: "analytics-refresh"
-} as const;
+// ─── AI Insights ─────────────────────────────────────────
+
+export const insightTypeSchema = z.enum([
+  "REVENUE", "CUSTOMER", "CAMPAIGN", "SEGMENT", "CHURN",
+  "DELIVERY", "CONVERSION", "OPPORTUNITY", "ANOMALY", "PREDICTION",
+]);
+export type InsightType = z.infer<typeof insightTypeSchema>;
+
+export const insightPrioritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
+export type InsightPriority = z.infer<typeof insightPrioritySchema>;
+
+export const insightStatusSchema = z.enum(["ACTIVE", "DISMISSED", "COMPLETED", "EXPIRED", "ACTIONED"]);
+export type InsightStatus = z.infer<typeof insightStatusSchema>;
+
+export const insightActionTypeSchema = z.enum([
+  "GENERATE_SEGMENT", "CREATE_CAMPAIGN", "LAUNCH_CAMPAIGN",
+  "SEND_RETENTION_OFFER", "EXPORT_CSV", "VIEW_DETAILS",
+]);
+export type InsightActionType = z.infer<typeof insightActionTypeSchema>;
+
+export const insightActionStatusSchema = z.enum(["GENERATED", "CLICKED", "EXECUTED", "FAILED"]);
+export type InsightActionStatus = z.infer<typeof insightActionStatusSchema>;
+
+export const insightFeedbackRatingSchema = z.enum(["USEFUL", "NOT_USEFUL"]);
+export type InsightFeedbackRating = z.infer<typeof insightFeedbackRatingSchema>;
+
+export const listInsightsQuerySchema = z.object({
+  type: insightTypeSchema.optional(),
+  priority: insightPrioritySchema.optional(),
+  status: insightStatusSchema.default("ACTIVE"),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+}).strict();
+export type ListInsightsQuery = z.infer<typeof listInsightsQuerySchema>;
+
+export const listInsightsToolSchema = z.object({
+  type: insightTypeSchema.optional(),
+  priority: insightPrioritySchema.optional(),
+  limit: z.number().int().min(1).max(50).default(10),
+});
+
+export type ConfidenceFactor = {
+  factor: string;
+  weight: number;
+  direction: "positive" | "negative";
+};
+
+export type InsightActionView = {
+  id: string;
+  insightId: string;
+  type: InsightActionType;
+  label: string;
+  description: string | null;
+  status: InsightActionStatus;
+  metadata: Record<string, unknown> | null;
+  executedResult: Record<string, unknown> | null;
+  clickedAt: string | null;
+  executedAt: string | null;
+  createdAt: string;
+};
+
+export type InsightOutcomeView = {
+  id: string;
+  insightId: string;
+  predictedImpact: string;
+  actualImpact: string | null;
+  predictedValue: number | null;
+  actualValue: number | null;
+  accuracy: number | null;
+  actionTaken: string;
+  measuredAt: string;
+  createdAt: string;
+};
+
+export type AIInsightView = {
+  id: string;
+  type: InsightType;
+  priority: InsightPriority;
+  fingerprint: string;
+  title: string;
+  summary: string;
+  details: Record<string, unknown>;
+  recommendation: string;
+  estimatedImpact: string | null;
+  confidenceScore: number;
+  confidenceFactors: ConfidenceFactor[] | null;
+  impactScore: number;
+  priorityScore: number;
+  status: InsightStatus;
+  correlationId: string | null;
+  generatedAt: string;
+  expiresAt: string;
+  createdAt: string;
+  actions?: InsightActionView[];
+  outcomes?: InsightOutcomeView[];
+  feedback?: Array<{ rating: string; comment: string | null }>;
+};
+
+export type ExecutiveScoreView = {
+  overallScore: number;
+  revenueScore: number;
+  engagementScore: number;
+  churnScore: number;
+  deliveryScore: number;
+  campaignScore: number;
+  trend: "improving" | "stable" | "declining";
+  factors: Record<string, unknown>;
+  generatedAt: string;
+};
+
+export type InsightCorrelationView = {
+  id: string;
+  title: string;
+  summary: string;
+  insightIds: string[];
+  rootCause: string;
+  recommendation: string;
+  score: number;
+  generatedAt: string;
+  expiresAt: string;
+};
+
+export type DriftMetricsView = {
+  type: InsightType;
+  fingerprintPattern: string;
+  totalGenerated: number;
+  totalActioned: number;
+  totalDismissed: number;
+  actionRate: number;
+  dismissRate: number;
+  usefulRate: number;
+  driftScore: number;
+};
+
+export type CampaignSimulationView = {
+  expectedReach: number;
+  expectedOpenRate: number;
+  expectedClickRate: number;
+  expectedConversionRate: number;
+  expectedRevenue: number;
+  expectedCost: number;
+  expectedROI: number;
+  confidence: number;
+  basedOn: string;
+};
+
+export type ExecutiveSummaryView = {
+  revenue: { change: number; trend: "up" | "down" | "flat" };
+  customerGrowth: { change: number; trend: "up" | "down" | "flat" };
+  campaignPerformance: { change: number; trend: "up" | "down" | "flat" };
+  executiveScore: ExecutiveScoreView;
+  risks: Array<{ title: string; severity: string }>;
+  recommendedActions: Array<{ title: string; insightId: string }>;
+  generatedAt: string;
+};

@@ -2,7 +2,7 @@ import { Controller, Get, Param, Sse, UseGuards } from "@nestjs/common";
 import type { MessageEvent } from "@nestjs/common";
 import { map, type Observable } from "rxjs";
 import { AuthGuard } from "../auth/auth.guard";
-import { QueueService } from "../queue/queue.service";
+import { AppEventsService } from "../events/app-events.service";
 import { AnalyticsService } from "./analytics.service";
 
 @Controller()
@@ -10,7 +10,7 @@ import { AnalyticsService } from "./analytics.service";
 export class AnalyticsController {
   constructor(
     private readonly analytics: AnalyticsService,
-    private readonly queues: QueueService
+    private readonly events: AppEventsService
   ) {}
 
   @Get("dashboard")
@@ -50,7 +50,7 @@ export class AnalyticsController {
 
   @Sse("analytics/stream")
   stream(): Observable<MessageEvent> {
-    return this.queues.stream("analytics").pipe(
+    return this.events.stream("analytics").pipe(
       map((data) => ({
         data:
           typeof data === "object" && data !== null ? data : String(data)

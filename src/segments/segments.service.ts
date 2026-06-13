@@ -3,6 +3,7 @@ import type { PaginationQuery, SegmentRuleGroup } from "../contracts";
 import { toInputJson } from "../common/json";
 import { PrismaService } from "../prisma/prisma.service";
 import { SegmentCompilerService } from "./segment-compiler.service";
+import { rulesToDescription } from "./rule-description.util";
 
 @Injectable()
 export class SegmentsService {
@@ -47,10 +48,11 @@ export class SegmentsService {
     rules: unknown;
   }) {
     const rules = this.compiler.validate(input.rules);
+    const description = input.description ?? rulesToDescription(rules as SegmentRuleGroup);
     const segment = await this.prisma.segment.create({
       data: {
         name: input.name,
-        description: input.description,
+        description,
         rules: toInputJson(rules)
       }
     });
@@ -108,13 +110,19 @@ export class SegmentsService {
     const rules = input.rules === undefined
       ? undefined
       : this.compiler.validate(input.rules);
+    // Auto-regenerate description when rules change and no explicit description provided
+    const autoDescription = rules !== undefined && input.description === undefined
+      ? rulesToDescription(rules as SegmentRuleGroup)
+      : undefined;
     const updated = await this.prisma.segment.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.description !== undefined
           ? { description: input.description }
-          : {}),
+          : autoDescription !== undefined
+            ? { description: autoDescription }
+            : {}),
         ...(rules !== undefined ? { rules: toInputJson(rules) } : {})
       }
     });

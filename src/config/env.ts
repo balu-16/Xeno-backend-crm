@@ -1,10 +1,5 @@
 import { z } from "zod";
 
-const booleanString = z
-  .enum(["true", "false"])
-  .default("true")
-  .transform((value) => value === "true");
-
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   CRM_PORT: z.coerce.number().int().positive().default(3000),
@@ -13,13 +8,8 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default("8h"),
   FRONTEND_URL: z.string().url().default("http://localhost:5173"),
-  REDIS_HOST: z.string().min(1),
-  REDIS_PORT: z.coerce.number().int().positive().default(6379),
-  REDIS_USERNAME: z.string().default("default"),
-  REDIS_PASSWORD: z.string().min(1),
-  REDIS_TLS: booleanString,
   CHANNEL_WEBHOOK_SECRET: z.string().min(32),
-  CHANNEL_SERVICE_URL: z.string().url().optional(),
+  CHANNEL_SERVICE_URL: z.string().url().default("http://localhost:3001"),
   ANTHROPIC_BASE_URL: z.string().url(),
   XIAOMI_AUTH_TOKEN: z.string().min(1),
   XIAOMI_MODEL: z.string().default("mimo-v2.5-pro"),

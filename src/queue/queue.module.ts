@@ -1,9 +1,3 @@
-import { Global, Module } from "@nestjs/common";
-import { QueueService } from "./queue.service";
-
-@Global()
-@Module({
-  providers: [QueueService],
-  exports: [QueueService]
-})
-export class QueueModule {}
+// DEPRECATED: Queue module removed. Redis/BullMQ has been replaced with HTTP + in-process simulation.
+// This file is kept empty to prevent import errors from stale references.
+export {};

@@ -19,7 +19,8 @@ import { Public } from "../auth/auth.guard";
 import { toInputJson } from "../common/json";
 import type { Environment } from "../config/env";
 import { PrismaService } from "../prisma/prisma.service";
-import { QueueService } from "../queue/queue.service";
+import { AppEventsService } from "../events/app-events.service";
+import { ReceiptProcessingService } from "./receipt-processing.service";
 
 type RawRequest = Request & { rawBody?: Buffer };
 
@@ -27,8 +28,9 @@ type RawRequest = Request & { rawBody?: Buffer };
 export class WebhooksController {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly queues: QueueService,
-    private readonly config: ConfigService<Environment, true>
+    private readonly config: ConfigService<Environment, true>,
+    private readonly receipts: ReceiptProcessingService,
+    private readonly events: AppEventsService
   ) {}
 
   @Public()
@@ -70,8 +72,9 @@ export class WebhooksController {
           })
         }
       });
-      await this.queues.addReceiptJob({ ...event, receiptId: receipt.id });
-      await this.queues.publish("monitor", {
+      // Process receipt synchronously (no queue)
+      await this.receipts.processReceipt({ ...event, receiptId: receipt.id });
+      this.events.publish("monitor", {
         type: "webhook.received",
         receiptId: receipt.id,
         event

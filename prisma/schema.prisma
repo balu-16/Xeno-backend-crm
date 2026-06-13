@@ -361,3 +361,167 @@ model EmailVerification {
 
   @@index([userId])
 }
+
+enum InsightType {
+  REVENUE
+  CUSTOMER
+  CAMPAIGN
+  SEGMENT
+  CHURN
+  DELIVERY
+  CONVERSION
+  OPPORTUNITY
+  ANOMALY
+  PREDICTION
+}
+
+enum InsightPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum InsightStatus {
+  ACTIVE
+  DISMISSED
+  COMPLETED
+  EXPIRED
+  ACTIONED
+}
+
+enum InsightActionType {
+  GENERATE_SEGMENT
+  CREATE_CAMPAIGN
+  LAUNCH_CAMPAIGN
+  SEND_RETENTION_OFFER
+  EXPORT_CSV
+  VIEW_DETAILS
+}
+
+enum InsightActionStatus {
+  GENERATED
+  CLICKED
+  EXECUTED
+  FAILED
+}
+
+enum InsightFeedbackRating {
+  USEFUL
+  NOT_USEFUL
+}
+
+model AIInsight {
+  id               String         @id @default(uuid())
+  type             InsightType
+  priority         InsightPriority
+  fingerprint      String         @unique
+  title            String
+  summary          String
+  details          Json
+  recommendation   String
+  estimatedImpact  String?
+  confidenceScore  Float          @default(0.5)
+  confidenceFactors Json?
+  impactScore      Float          @default(0.5)
+  priorityScore    Float          @default(0.5)
+  status           InsightStatus  @default(ACTIVE)
+  sourceData       Json?
+  correlationId    String?
+  generatedAt      DateTime       @default(now())
+  expiresAt        DateTime
+  dismissedAt      DateTime?
+  completedAt      DateTime?
+  actionedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  actions          AIInsightAction[]
+  outcomes         AIInsightOutcome[]
+  feedback         AIInsightFeedback[]
+
+  @@index([type, status])
+  @@index([priority, status])
+  @@index([status, generatedAt])
+  @@index([fingerprint])
+  @@index([expiresAt])
+  @@index([correlationId])
+}
+
+model AIInsightAction {
+  id              String              @id @default(uuid())
+  insightId       String
+  insight         AIInsight           @relation(fields: [insightId], references: [id], onDelete: Cascade)
+  type            InsightActionType
+  label           String
+  description     String?
+  status          InsightActionStatus @default(GENERATED)
+  metadata        Json?
+  executedResult  Json?
+  clickedAt       DateTime?
+  executedAt      DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([insightId])
+  @@index([status])
+}
+
+model AIInsightOutcome {
+  id               String    @id @default(uuid())
+  insightId        String
+  insight          AIInsight @relation(fields: [insightId], references: [id], onDelete: Cascade)
+  predictedImpact  String
+  actualImpact     String?
+  predictedValue   Float?
+  actualValue      Float?
+  accuracy         Float?
+  actionTaken      String
+  measuredAt       DateTime
+  createdAt        DateTime  @default(now())
+
+  @@index([insightId])
+  @@index([measuredAt])
+}
+
+model AIInsightFeedback {
+  id        String                @id @default(uuid())
+  insightId String
+  insight   AIInsight             @relation(fields: [insightId], references: [id], onDelete: Cascade)
+  userId    String?
+  rating    InsightFeedbackRating
+  comment   String?
+  createdAt DateTime             @default(now())
+
+  @@unique([insightId, userId])
+  @@index([insightId])
+}
+
+model AIInsightCorrelation {
+  id          String   @id @default(uuid())
+  title       String
+  summary     String
+  insightIds  String[]
+  rootCause   String
+  recommendation String
+  score       Float
+  generatedAt DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([generatedAt])
+}
+
+model AIExecutiveScore {
+  id             String   @id @default(uuid())
+  overallScore   Float
+  revenueScore   Float
+  engagementScore Float
+  churnScore     Float
+  deliveryScore  Float
+  campaignScore  Float
+  factors        Json
+  trend          String
+  generatedAt    DateTime @default(now())
+
+  @@index([generatedAt])
+}

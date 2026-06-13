@@ -1,4 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import type { PaginationQuery } from "../contracts";
 import { PrismaService } from "../prisma/prisma.service";
@@ -12,12 +16,16 @@ export class CustomersService {
       ...(query.search
         ? {
             OR: [
-              { name: { contains: query.search, mode: "insensitive" as const } },
-              { email: { contains: query.search, mode: "insensitive" as const } }
-            ]
+              {
+                name: { contains: query.search, mode: "insensitive" as const },
+              },
+              {
+                email: { contains: query.search, mode: "insensitive" as const },
+              },
+            ],
           }
         : {}),
-      ...(filters?.tag ? { tags: { has: filters.tag } } : {})
+      ...(filters?.tag ? { tags: { has: filters.tag } } : {}),
     };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
@@ -30,24 +38,28 @@ export class CustomersService {
           orders: {
             select: { createdAt: true },
             orderBy: { createdAt: "desc" },
-            take: 1
-          }
-        }
+            take: 1,
+          },
+        },
       }),
-      this.prisma.customer.count({ where })
+      this.prisma.customer.count({ where }),
     ]);
     // Use the already-fetched customer IDs instead of re-querying
     const customerIds = items.map((c) => c.id);
-    const orderAggregates = customerIds.length > 0
-      ? await this.prisma.order.groupBy({
-          by: ["customerId"],
-          where: { customerId: { in: customerIds } },
-          orderBy: { customerId: "asc" },
-          _sum: { amount: true }
-        })
-      : [];
+    const orderAggregates =
+      customerIds.length > 0
+        ? await this.prisma.order.groupBy({
+            by: ["customerId"],
+            where: { customerId: { in: customerIds } },
+            orderBy: { customerId: "asc" },
+            _sum: { amount: true },
+          })
+        : [];
     const ltvMap = new Map(
-      orderAggregates.map((row) => [row.customerId, Number(row._sum?.amount ?? 0)])
+      orderAggregates.map((row) => [
+        row.customerId,
+        Number(row._sum?.amount ?? 0),
+      ]),
     );
     return {
       data: items.map((customer) => ({
@@ -58,14 +70,14 @@ export class CustomersService {
         metadata: customer.metadata,
         orders: customer._count.orders,
         lifetimeValue: ltvMap.get(customer.id) ?? 0,
-        lastActivity: customer.orders[0]?.createdAt ?? customer.createdAt
+        lastActivity: customer.orders[0]?.createdAt ?? customer.createdAt,
       })),
       meta: {
         page: query.page,
         pageSize: query.pageSize,
         total,
-        totalPages: Math.ceil(total / query.pageSize)
-      }
+        totalPages: Math.ceil(total / query.pageSize),
+      },
     };
   }
 
@@ -77,7 +89,7 @@ export class CustomersService {
     metadata?: Record<string, unknown>;
   }) {
     const existing = await this.prisma.customer.findUnique({
-      where: { email: input.email.toLowerCase() }
+      where: { email: input.email.toLowerCase() },
     });
     if (existing) {
       throw new ConflictException("A customer with this email already exists");
@@ -88,8 +100,8 @@ export class CustomersService {
         email: input.email.toLowerCase(),
         phone: input.phone,
         tags: input.tags ?? [],
-        metadata: (input.metadata ?? {}) as Prisma.InputJsonObject
-      }
+        metadata: (input.metadata ?? {}) as Prisma.InputJsonObject,
+      },
     });
   }
 
@@ -101,9 +113,9 @@ export class CustomersService {
         campaignEvents: {
           include: { campaign: { select: { name: true } } },
           orderBy: { occurredAt: "desc" },
-          take: 30
-        }
-      }
+          take: 30,
+        },
+      },
     });
     if (!customer) {
       throw new NotFoundException("Customer not found");
@@ -119,9 +131,9 @@ export class CustomersService {
         campaignEvents: {
           include: { campaign: { select: { name: true } } },
           orderBy: { occurredAt: "desc" },
-          take: 30
-        }
-      }
+          take: 30,
+        },
+      },
     });
     if (!customer) {
       throw new NotFoundException("Customer not found");
@@ -129,13 +141,16 @@ export class CustomersService {
     return customer;
   }
 
-  async update(id: string, input: {
-    name?: string;
-    email?: string;
-    phone?: string;
-    tags?: string[];
-    metadata?: Record<string, unknown>;
-  }) {
+  async update(
+    id: string,
+    input: {
+      name?: string;
+      email?: string;
+      phone?: string;
+      tags?: string[];
+      metadata?: Record<string, unknown>;
+    },
+  ) {
     const customer = await this.prisma.customer.findUnique({ where: { id } });
     if (!customer) {
       throw new NotFoundException("Customer not found");
@@ -143,21 +158,27 @@ export class CustomersService {
     // Check email uniqueness if email is being changed
     if (input.email && input.email.toLowerCase() !== customer.email) {
       const existing = await this.prisma.customer.findUnique({
-        where: { email: input.email.toLowerCase() }
+        where: { email: input.email.toLowerCase() },
       });
       if (existing) {
-        throw new ConflictException("A customer with this email already exists");
+        throw new ConflictException(
+          "A customer with this email already exists",
+        );
       }
     }
     return this.prisma.customer.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name.trim() } : {}),
-        ...(input.email !== undefined ? { email: input.email.toLowerCase() } : {}),
+        ...(input.email !== undefined
+          ? { email: input.email.toLowerCase() }
+          : {}),
         ...(input.phone !== undefined ? { phone: input.phone } : {}),
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
-        ...(input.metadata !== undefined ? { metadata: input.metadata as Prisma.InputJsonObject } : {})
-      }
+        ...(input.metadata !== undefined
+          ? { metadata: input.metadata as Prisma.InputJsonObject }
+          : {}),
+      },
     });
   }
 
@@ -174,14 +195,14 @@ export class CustomersService {
     return this.prisma.customerLoginLog.findMany({
       where: { customerId },
       orderBy: { loggedInAt: "desc" },
-      take: 50
+      take: 50,
     });
   }
 
   async getCommunications(customerId: string) {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
-      select: { id: true }
+      select: { id: true },
     });
     if (!customer) {
       throw new NotFoundException("Customer not found");
@@ -189,23 +210,30 @@ export class CustomersService {
 
     const events = await this.prisma.campaignEvent.findMany({
       where: { customerId },
-      include: { campaign: { select: { id: true, name: true, channel: true } } },
+      include: {
+        campaign: { select: { id: true, name: true, channel: true } },
+      },
       orderBy: { occurredAt: "desc" },
-      take: 100
+      take: 100,
     });
 
     // Group events by campaign for a cleaner timeline view
     const campaignMap = new Map<
       string,
-      { campaign: { id: string; name: string; channel: string }; events: typeof events }
+      {
+        campaign: { id: string; name: string; channel: string };
+        events: typeof events;
+      }
     >();
 
     for (const event of events) {
       const cid = event.campaignId;
-      if (!campaignMap.has(cid)) {
-        campaignMap.set(cid, { campaign: event.campaign, events: [] });
+      let group = campaignMap.get(cid);
+      if (!group) {
+        group = { campaign: event.campaign, events: [] };
+        campaignMap.set(cid, group);
       }
-      campaignMap.get(cid)!.events.push(event);
+      group.events.push(event);
     }
 
     return {
@@ -218,16 +246,16 @@ export class CustomersService {
           id: e.id,
           type: e.type,
           payload: e.payload,
-          occurredAt: e.occurredAt
-        }))
-      }))
+          occurredAt: e.occurredAt,
+        })),
+      })),
     };
   }
 
   async getTags() {
     const customers = await this.prisma.customer.findMany({
       select: { tags: true },
-      where: { tags: { isEmpty: false } }
+      where: { tags: { isEmpty: false } },
     });
     const tagSet = new Set<string>();
     for (const c of customers) {

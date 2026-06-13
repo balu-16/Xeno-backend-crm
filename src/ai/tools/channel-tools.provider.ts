@@ -7,7 +7,6 @@ import {
 } from "./tool-provider";
 
 const TOOL_NAMES = [
-  "sendCampaign",
   "retryCampaign",
   "simulateDelivery"
 ] as const;

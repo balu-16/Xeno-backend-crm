@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AIInsightsModule } from "../ai-insights/ai-insights.module";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { CampaignsModule } from "../campaigns/campaigns.module";
 import { CustomersModule } from "../customers/customers.module";
@@ -16,7 +17,7 @@ import { OptionalToolsProvider } from "./tools/optional-tools.provider";
 import { SegmentToolsProvider } from "./tools/segment-tools.provider";
 
 @Module({
-  imports: [AnalyticsModule, CampaignsModule, CustomersModule, SegmentsModule],
+  imports: [AIInsightsModule, AnalyticsModule, CampaignsModule, CustomersModule, SegmentsModule],
   controllers: [AIController],
   providers: [
     AIService,

@@ -1,24 +1,25 @@
 import {
   ConflictException,
   Injectable,
-  NotFoundException
+  NotFoundException,
 } from "@nestjs/common";
 import {
   campaignStatusSchema,
   channelSchema,
   type CampaignDispatchJob,
-  type PaginationQuery
+  type PaginationQuery,
 } from "../contracts";
 import {
   CampaignEventType,
   CampaignStatus,
   ChannelType,
-  DeliveryStatus
+  DeliveryStatus,
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { toInputJson } from "../common/json";
 import { PrismaService } from "../prisma/prisma.service";
-import { QueueService } from "../queue/queue.service";
+import { ChannelDispatchService } from "../channel-dispatch/channel-dispatch.service";
+import { AnalyticsService } from "../analytics/analytics.service";
 import { SegmentCompilerService } from "../segments/segment-compiler.service";
 
 @Injectable()
@@ -26,12 +27,13 @@ export class CampaignsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly segments: SegmentCompilerService,
-    private readonly queues: QueueService
+    private readonly channelDispatch: ChannelDispatchService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   async list(
     query: PaginationQuery,
-    filters: { status?: string; channel?: string }
+    filters: { status?: string; channel?: string },
   ) {
     const status = filters.status
       ? campaignStatusSchema.parse(filters.status)
@@ -44,7 +46,7 @@ export class CampaignsService {
         ? { name: { contains: query.search, mode: "insensitive" as const } }
         : {}),
       ...(status ? { status } : {}),
-      ...(channel ? { channel } : {})
+      ...(channel ? { channel } : {}),
     };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.campaign.findMany({
@@ -52,9 +54,9 @@ export class CampaignsService {
         include: { segment: true, analytics: true },
         orderBy: { createdAt: "desc" },
         skip: (query.page - 1) * query.pageSize,
-        take: query.pageSize
+        take: query.pageSize,
       }),
-      this.prisma.campaign.count({ where })
+      this.prisma.campaign.count({ where }),
     ]);
     return {
       data: items,
@@ -62,8 +64,8 @@ export class CampaignsService {
         page: query.page,
         pageSize: query.pageSize,
         total,
-        totalPages: Math.ceil(total / query.pageSize)
-      }
+        totalPages: Math.ceil(total / query.pageSize),
+      },
     };
   }
 
@@ -77,7 +79,7 @@ export class CampaignsService {
   }) {
     const channel = channelSchema.parse(input.channel);
     const segment = await this.prisma.segment.findUnique({
-      where: { id: input.segmentId }
+      where: { id: input.segmentId },
     });
     if (!segment) {
       throw new NotFoundException("Segment not found");
@@ -95,8 +97,8 @@ export class CampaignsService {
           channel,
           subject: input.subject,
           message: input.message,
-          scheduledAt
-        }
+          scheduledAt,
+        },
       });
       await transaction.campaignEvent.create({
         data: {
@@ -105,11 +107,11 @@ export class CampaignsService {
           campaignId: campaign.id,
           correlationId,
           payload: toInputJson({ name: campaign.name, channel }),
-          occurredAt: new Date()
-        }
+          occurredAt: new Date(),
+        },
       });
       await transaction.campaignAnalytics.create({
-        data: { campaignId: campaign.id }
+        data: { campaignId: campaign.id },
       });
       return campaign;
     });
@@ -118,7 +120,7 @@ export class CampaignsService {
   async previewAudience(id: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
-      include: { segment: true }
+      include: { segment: true },
     });
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
@@ -130,7 +132,7 @@ export class CampaignsService {
   async launch(id: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
-      include: { segment: true }
+      include: { segment: true },
     });
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
@@ -140,7 +142,7 @@ export class CampaignsService {
       throw new ConflictException("Only draft campaigns can be launched");
     }
     const audience = await this.segments.match(campaign.segment.rules, {
-      limit: 10000
+      limit: 10000,
     });
     if (audience.length === 0) {
       throw new ConflictException("The selected segment has no customers");
@@ -154,11 +156,13 @@ export class CampaignsService {
         data: {
           status: CampaignStatus.QUEUED,
           audienceSizeSnapshot: audience.length,
-          launchedAt: occurredAt
-        }
+          launchedAt: occurredAt,
+        },
       });
       if (updated.count === 0) {
-        throw new ConflictException("Campaign was already launched by another request");
+        throw new ConflictException(
+          "Campaign was already launched by another request",
+        );
       }
       await transaction.campaignEvent.create({
         data: {
@@ -167,8 +171,8 @@ export class CampaignsService {
           campaignId: id,
           correlationId,
           payload: toInputJson({ audienceSize: audience.length }),
-          occurredAt
-        }
+          occurredAt,
+        },
       });
       await transaction.campaignEvent.createMany({
         data: audience.map((customer) => ({
@@ -178,20 +182,20 @@ export class CampaignsService {
           customerId: customer.id,
           correlationId,
           payload: toInputJson({ channel: campaign.channel }),
-          occurredAt
-        }))
+          occurredAt,
+        })),
       });
       await transaction.campaignLog.createMany({
         data: audience.map((customer) => ({
           campaignId: id,
           customerId: customer.id,
           status: DeliveryStatus.QUEUED,
-          lastEventAt: occurredAt
-        }))
+          lastEventAt: occurredAt,
+        })),
       });
       await transaction.campaignAnalytics.update({
         where: { campaignId: id },
-        data: { totalAudience: audience.length, totalQueued: audience.length }
+        data: { totalAudience: audience.length, totalQueued: audience.length },
       });
     });
 
@@ -200,36 +204,43 @@ export class CampaignsService {
       customerId: customer.id,
       channel: campaign.channel,
       destination:
-        campaign.channel === ChannelType.EMAIL ? customer.email : customer.phone,
+        campaign.channel === ChannelType.EMAIL
+          ? customer.email
+          : customer.phone,
       subject: campaign.subject,
       message: campaign.message,
-      correlationId
+      correlationId,
     }));
     try {
-      await this.queues.addDispatchJobs(jobs);
+      const dispatchResult = await this.channelDispatch.dispatchMany(jobs);
+      if (dispatchResult.failed > 0 && dispatchResult.accepted === 0) {
+        throw new Error(
+          `All ${dispatchResult.failed} dispatch requests failed`,
+        );
+      }
       await this.prisma.campaign.update({
         where: { id },
-        data: { status: CampaignStatus.RUNNING }
+        data: { status: CampaignStatus.RUNNING },
       });
     } catch (error) {
       await this.prisma.$transaction([
         this.prisma.campaign.update({
           where: { id },
-          data: { status: CampaignStatus.FAILED }
+          data: { status: CampaignStatus.FAILED },
         }),
         // Mark all QUEUED log entries as FAILED so analytics don't show ghost pending
         this.prisma.campaignLog.updateMany({
           where: { campaignId: id, status: DeliveryStatus.QUEUED },
-          data: { status: DeliveryStatus.FAILED, lastEventAt: new Date() }
+          data: { status: DeliveryStatus.FAILED, lastEventAt: new Date() },
         }),
         this.prisma.processingFailure.create({
           data: {
             queue: "campaign-dispatch",
             correlationId,
             reason: error instanceof Error ? error.message : String(error),
-            diagnostics: toInputJson({ campaignId: id })
-          }
-        })
+            diagnostics: toInputJson({ campaignId: id }),
+          },
+        }),
       ]);
       throw error;
     }
@@ -237,7 +248,7 @@ export class CampaignsService {
       campaignId: id,
       status: CampaignStatus.RUNNING,
       audienceSize: audience.length,
-      correlationId
+      correlationId,
     };
   }
 
@@ -247,8 +258,8 @@ export class CampaignsService {
       include: {
         segment: true,
         analytics: true,
-        events: { orderBy: { occurredAt: "desc" }, take: 100 }
-      }
+        events: { orderBy: { occurredAt: "desc" }, take: 100 },
+      },
     });
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
@@ -256,25 +267,28 @@ export class CampaignsService {
     const failures = await this.prisma.campaignLog.groupBy({
       by: ["failureReason"],
       where: { campaignId: id, status: DeliveryStatus.FAILED },
-      _count: true
+      _count: true,
     });
     return {
       ...campaign,
       failures: failures.map((failure) => ({
         reason: failure.failureReason ?? "Unknown delivery failure",
-        count: failure._count
-      }))
+        count: failure._count,
+      })),
     };
   }
 
   async remove(id: string) {
     const campaign = await this.prisma.campaign.findUnique({
-      where: { id }
+      where: { id },
     });
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
     }
-    if (campaign.status === CampaignStatus.RUNNING || campaign.status === CampaignStatus.QUEUED) {
+    if (
+      campaign.status === CampaignStatus.RUNNING ||
+      campaign.status === CampaignStatus.QUEUED
+    ) {
       throw new ConflictException("Cannot delete a running or queued campaign");
     }
     await this.prisma.campaign.delete({ where: { id } });
@@ -286,19 +300,24 @@ export class CampaignsService {
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
     }
-    if (campaign.status !== CampaignStatus.RUNNING && campaign.status !== CampaignStatus.QUEUED) {
-      throw new ConflictException("Only running or queued campaigns can be paused");
+    if (
+      campaign.status !== CampaignStatus.RUNNING &&
+      campaign.status !== CampaignStatus.QUEUED
+    ) {
+      throw new ConflictException(
+        "Only running or queued campaigns can be paused",
+      );
     }
     return this.prisma.campaign.update({
       where: { id },
-      data: { status: CampaignStatus.PAUSED }
+      data: { status: CampaignStatus.PAUSED },
     });
   }
 
   async retryFailed(id: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
-      include: { segment: true }
+      include: { segment: true },
     });
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
@@ -306,7 +325,7 @@ export class CampaignsService {
     const failedLogs = await this.prisma.campaignLog.findMany({
       where: { campaignId: id, status: DeliveryStatus.FAILED },
       include: { customer: true },
-      take: 10000
+      take: 10000,
     });
     if (failedLogs.length === 0) {
       return { campaignId: id, retried: 0, correlationId: null };
@@ -315,7 +334,7 @@ export class CampaignsService {
     await this.prisma.$transaction([
       this.prisma.campaign.update({
         where: { id },
-        data: { status: CampaignStatus.RUNNING }
+        data: { status: CampaignStatus.RUNNING },
       }),
       this.prisma.campaignEvent.createMany({
         data: failedLogs.map((log) => ({
@@ -325,17 +344,17 @@ export class CampaignsService {
           customerId: log.customerId,
           correlationId,
           payload: toInputJson({ retry: true, channel: campaign.channel }),
-          occurredAt: new Date()
-        }))
+          occurredAt: new Date(),
+        })),
       }),
       this.prisma.campaignLog.updateMany({
         where: { campaignId: id, status: DeliveryStatus.FAILED },
         data: {
           status: DeliveryStatus.QUEUED,
           failureReason: null,
-          lastEventAt: new Date()
-        }
-      })
+          lastEventAt: new Date(),
+        },
+      }),
     ]);
     const jobs: CampaignDispatchJob[] = failedLogs.map((log) => ({
       campaignId: id,
@@ -347,9 +366,9 @@ export class CampaignsService {
           : log.customer.phone,
       subject: campaign.subject,
       message: campaign.message,
-      correlationId
+      correlationId,
     }));
-    await this.queues.addDispatchJobs(jobs);
+    await this.channelDispatch.dispatchMany(jobs);
     return { campaignId: id, retried: failedLogs.length, correlationId };
   }
 
@@ -360,16 +379,16 @@ export class CampaignsService {
       keyof typeof CampaignEventType,
       "CampaignCreated" | "CampaignLaunched" | "MessageQueued"
     >,
-    payload: Record<string, unknown> = {}
+    payload: Record<string, unknown> = {},
   ) {
     const campaign = await this.prisma.campaign.findUnique({
-      where: { id: campaignId }
+      where: { id: campaignId },
     });
     if (!campaign) {
       throw new NotFoundException("Campaign not found");
     }
     const customer = await this.prisma.customer.findUnique({
-      where: { id: customerId }
+      where: { id: customerId },
     });
     if (!customer) {
       throw new NotFoundException("Customer not found");
@@ -384,7 +403,7 @@ export class CampaignsService {
       [CampaignEventType.MessageOpened]: DeliveryStatus.OPENED,
       [CampaignEventType.MessageClicked]: DeliveryStatus.CLICKED,
       [CampaignEventType.MessageConverted]: DeliveryStatus.CONVERTED,
-      [CampaignEventType.MessageFailed]: DeliveryStatus.FAILED
+      [CampaignEventType.MessageFailed]: DeliveryStatus.FAILED,
     };
     const occurredAt = new Date();
     const correlationId = randomUUID();
@@ -400,9 +419,11 @@ export class CampaignsService {
           data: {
             customerId,
             amount,
-            items: toInputJson([{ sku: "AI-SIMULATED-CONVERSION", quantity: 1 }]),
-            createdAt: occurredAt
-          }
+            items: toInputJson([
+              { sku: "AI-SIMULATED-CONVERSION", quantity: 1 },
+            ]),
+            createdAt: occurredAt,
+          },
         });
         attributedOrderId = order.id;
       }
@@ -415,8 +436,8 @@ export class CampaignsService {
           attributedOrderId,
           correlationId,
           payload: toInputJson({ ...payload, simulatedBy: "ai-tool" }),
-          occurredAt
-        }
+          occurredAt,
+        },
       });
       const status = statusByEvent[eventType];
       if (status) {
@@ -428,37 +449,45 @@ export class CampaignsService {
             status,
             failureReason:
               status === DeliveryStatus.FAILED
-                ? String(payload.reason ?? "Simulated failure")
+                ? this.formatFailureReason(payload.reason)
                 : null,
             attributedOrderId,
-            lastEventAt: occurredAt
+            lastEventAt: occurredAt,
           },
           update: {
             status,
             failureReason:
               status === DeliveryStatus.FAILED
-                ? String(payload.reason ?? "Simulated failure")
+                ? this.formatFailureReason(payload.reason)
                 : null,
             ...(attributedOrderId ? { attributedOrderId } : {}),
-            lastEventAt: occurredAt
-          }
+            lastEventAt: occurredAt,
+          },
         });
       }
       return event;
     });
-    await this.queues.addAnalyticsJob({ campaignId, correlationId });
-    return { campaignId, customerId, event: result.type, eventId: result.id, correlationId };
+    await this.analytics.refreshCampaign(campaignId);
+    return {
+      campaignId,
+      customerId,
+      event: result.type,
+      eventId: result.id,
+      correlationId,
+    };
   }
 
   /** Launch all campaigns whose scheduledAt has passed */
-  async launchScheduled(): Promise<Array<{ campaignId: string; audienceSize: number }>> {
+  async launchScheduled(): Promise<
+    Array<{ campaignId: string; audienceSize: number }>
+  > {
     const now = new Date();
     const scheduled = await this.prisma.campaign.findMany({
       where: {
         status: CampaignStatus.DRAFT,
-        scheduledAt: { lte: now }
+        scheduledAt: { lte: now },
       },
-      take: 10
+      take: 10,
     });
     const results: Array<{ campaignId: string; audienceSize: number }> = [];
     for (const campaign of scheduled) {
@@ -466,15 +495,23 @@ export class CampaignsService {
         const result = await this.launch(campaign.id);
         results.push(result);
       } catch (error) {
-        await this.prisma.processingFailure.create({
-          data: {
-            queue: "scheduled-launch",
-            reason: error instanceof Error ? error.message : String(error),
-            diagnostics: toInputJson({ campaignId: campaign.id })
-          }
-        }).catch(() => {});
+        await this.prisma.processingFailure
+          .create({
+            data: {
+              queue: "scheduled-launch",
+              reason: error instanceof Error ? error.message : String(error),
+              diagnostics: toInputJson({ campaignId: campaign.id }),
+            },
+          })
+          .catch(() => {});
       }
     }
     return results;
+  }
+
+  private formatFailureReason(reason: unknown): string {
+    return typeof reason === "string" && reason.trim().length > 0
+      ? reason
+      : "Simulated failure";
   }
 }

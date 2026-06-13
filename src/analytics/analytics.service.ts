@@ -10,7 +10,7 @@ import {
   Prisma
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import { QueueService } from "../queue/queue.service";
+import { AppEventsService } from "../events/app-events.service";
 
 type CampaignAggregateRow = {
   sent: bigint;
@@ -32,7 +32,7 @@ function rate(numerator: number, denominator: number): number {
 export class AnalyticsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly queues: QueueService
+    private readonly events: AppEventsService
   ) {}
 
   async refreshCampaign(
@@ -48,23 +48,23 @@ export class AnalyticsService {
     }
     const rows = await this.prisma.$queryRaw<CampaignAggregateRow[]>(Prisma.sql`
       SELECT
-        COUNT(DISTINCT "customerId") FILTER (
-          WHERE type = 'MessageSent'::"CampaignEventType"
+        COUNT(DISTINCT e."customerId") FILTER (
+          WHERE e.type = 'MessageSent'::"CampaignEventType"
         )::bigint AS sent,
-        COUNT(DISTINCT "customerId") FILTER (
-          WHERE type = 'MessageDelivered'::"CampaignEventType"
+        COUNT(DISTINCT e."customerId") FILTER (
+          WHERE e.type = 'MessageDelivered'::"CampaignEventType"
         )::bigint AS delivered,
-        COUNT(DISTINCT "customerId") FILTER (
-          WHERE type = 'MessageOpened'::"CampaignEventType"
+        COUNT(DISTINCT e."customerId") FILTER (
+          WHERE e.type = 'MessageOpened'::"CampaignEventType"
         )::bigint AS opened,
-        COUNT(DISTINCT "customerId") FILTER (
-          WHERE type = 'MessageClicked'::"CampaignEventType"
+        COUNT(DISTINCT e."customerId") FILTER (
+          WHERE e.type = 'MessageClicked'::"CampaignEventType"
         )::bigint AS clicked,
-        COUNT(DISTINCT "customerId") FILTER (
-          WHERE type = 'MessageConverted'::"CampaignEventType"
+        COUNT(DISTINCT e."customerId") FILTER (
+          WHERE e.type = 'MessageConverted'::"CampaignEventType"
         )::bigint AS converted,
-        COUNT(DISTINCT "customerId") FILTER (
-          WHERE type = 'MessageFailed'::"CampaignEventType"
+        COUNT(DISTINCT e."customerId") FILTER (
+          WHERE e.type = 'MessageFailed'::"CampaignEventType"
         )::bigint AS failed,
         COALESCE(SUM(o.amount), 0) AS revenue
       FROM "CampaignEvent" e
@@ -105,9 +105,9 @@ export class AnalyticsService {
           totalConverted: converted,
           totalFailed: failed,
           deliveryRate: rate(delivered, sent),
-          openRate: rate(opened, delivered),
-          clickRate: rate(clicked, opened),
-          conversionRate: rate(converted, clicked),
+          openRate: rate(opened, sent),
+          clickRate: rate(clicked, sent),
+          conversionRate: rate(converted, sent),
           revenueAccrued: revenue
         },
         update: {
@@ -120,9 +120,9 @@ export class AnalyticsService {
           totalConverted: converted,
           totalFailed: failed,
           deliveryRate: rate(delivered, sent),
-          openRate: rate(opened, delivered),
-          clickRate: rate(clicked, opened),
-          conversionRate: rate(converted, clicked),
+          openRate: rate(opened, sent),
+          clickRate: rate(clicked, sent),
+          conversionRate: rate(converted, sent),
           revenueAccrued: revenue
         }
       });
@@ -171,7 +171,7 @@ export class AnalyticsService {
       updatedAt: analytics.updatedAt.toISOString()
     };
     if (publish) {
-      await this.queues.publish("analytics", {
+      this.events.publish("analytics", {
         type: "campaign.analytics.updated",
         campaignId,
         performance
@@ -375,9 +375,9 @@ export class AnalyticsService {
       totalRevenue: Number(orderRevenue._sum.amount ?? 0),
       activeCampaigns,
       deliveryRate: rate(delivered, sent),
-      openRate: rate(opened, delivered),
-      clickRate: rate(clicked, opened),
-      conversionRate: rate(converted, clicked),
+      openRate: rate(opened, sent),
+      clickRate: rate(clicked, sent),
+      conversionRate: rate(converted, sent),
       campaignPerformance: campaignTrend.map((row) => ({
         date: row.date.toISOString(),
         sent: Number(row.sent),
@@ -456,9 +456,9 @@ export class AnalyticsService {
       converted: Number(row.converted),
       revenue: Number(row.revenue),
       deliveryRate: rate(Number(row.delivered), Number(row.sent)),
-      openRate: rate(Number(row.opened), Number(row.delivered)),
-      clickRate: rate(Number(row.clicked), Number(row.opened)),
-      conversionRate: rate(Number(row.converted), Number(row.clicked))
+      openRate: rate(Number(row.opened), Number(row.sent)),
+      clickRate: rate(Number(row.clicked), Number(row.sent)),
+      conversionRate: rate(Number(row.converted), Number(row.sent))
     }));
   }
 
@@ -553,9 +553,9 @@ export class AnalyticsService {
       converted,
       failed,
       deliveryRate: rate(delivered, sent),
-      openRate: rate(opened, delivered),
-      clickRate: rate(clicked, opened),
-      conversionRate: rate(converted, clicked),
+      openRate: rate(opened, sent),
+      clickRate: rate(clicked, sent),
+      conversionRate: rate(converted, sent),
       failureReasons: failures.map((failure) => ({
         reason: failure.failureReason ?? "Unknown delivery failure",
         count: failure._count

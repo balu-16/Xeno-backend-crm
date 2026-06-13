@@ -11,6 +11,7 @@ import {
   ThrottlerModule
 } from "@nestjs/throttler";
 import { AIModule } from "./ai/ai.module";
+import { AIInsightsModule } from "./ai-insights/ai-insights.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { AuthGuard } from "./auth/auth.guard";
 import { AuthModule } from "./auth/auth.module";
@@ -24,10 +25,10 @@ import { OriginMiddleware } from "./common/origin.middleware";
 import { validateEnvironment } from "./config/env";
 import { CustomersModule } from "./customers/customers.module";
 import { DevModule } from "./dev/dev.module";
+import { EventsModule } from "./events/events.module";
 import { HealthModule } from "./health/health.module";
 import { MonitorModule } from "./monitor/monitor.module";
 import { PrismaModule } from "./prisma/prisma.module";
-import { QueueModule } from "./queue/queue.module";
 import { SegmentsModule } from "./segments/segments.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 
@@ -42,13 +43,14 @@ const isDev = process.env.NODE_ENV !== "production";
     }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     PrismaModule,
-    QueueModule,
+    EventsModule,
     AuthModule,
     CustomersModule,
     SegmentsModule,
     CampaignsModule,
     AnalyticsModule,
     AIModule,
+    AIInsightsModule,
     MonitorModule,
     WebhooksModule,
     HealthModule,

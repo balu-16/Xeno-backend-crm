@@ -29,13 +29,3 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/package.json ./
 EXPOSE 3000
 CMD ["node", "dist/src/main.js"]
-
-# ---- Production (Worker) ----
-FROM base AS worker
-WORKDIR /app
-ENV NODE_ENV=production
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/prisma ./prisma
-COPY --from=build /app/package.json ./
-CMD ["node", "dist/src/worker.js"]
