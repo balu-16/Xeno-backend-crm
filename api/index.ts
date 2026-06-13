@@ -3,6 +3,7 @@ import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { ExpressAdapter } from "@nestjs/platform-express";
 import cookieParser from "cookie-parser";
+import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import type { NextFunction, Request, Response } from "express";
@@ -11,8 +12,29 @@ import { AppModule } from "../src/app.module";
 
 let cachedHandler: ReturnType<typeof serverless>;
 
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "https://xeno-frontend-kappa.vercel.app",
+  "http://localhost:5173",
+].filter(Boolean) as string[];
+
 async function createApp() {
   const expressApp = express();
+
+  // CORS must be applied BEFORE NestJS to handle OPTIONS preflight
+  expressApp.use(cors({
+    origin: (origin: string | undefined, callback: (err: Error | null, allow: boolean) => void) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: origin ${origin} not allowed`), false);
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+  }));
+
   const app = await NestFactory.create(
     AppModule,
     new ExpressAdapter(expressApp),
@@ -36,24 +58,6 @@ async function createApp() {
     res.setHeader("Expires", "0");
     res.setHeader("Surrogate-Control", "no-store");
     next();
-  });
-
-  const frontendUrl = process.env.FRONTEND_URL;
-  const allowedOrigins = [
-    frontendUrl,
-    "https://xeno-frontend-kappa.vercel.app",
-    "http://localhost:5173",
-  ].filter(Boolean) as string[];
-
-  app.enableCors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow: boolean) => void) => {
-      // Allow requests with no origin (server-to-server, curl, same-origin SSR)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      callback(new Error(`CORS: origin ${origin} not allowed`), false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
 
   app.useGlobalPipes(
