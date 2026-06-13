@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "dev": "nest start --watch",
     "start": "node dist/src/main.js",
     "lint": "eslint src prisma test --max-warnings=0",

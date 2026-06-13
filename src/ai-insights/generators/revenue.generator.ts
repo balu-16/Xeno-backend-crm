@@ -203,7 +203,7 @@ export class RevenueGenerator implements InsightGenerator {
         0,
       );
       if (totalSegmentRevenue > 0) {
-        const topSegment = segmentRevenue[0];
+        const topSegment = segmentRevenue[0]!;
         const topShare = Number(topSegment.revenue) / totalSegmentRevenue;
 
         if (topShare > 0.6) {
