@@ -76,19 +76,19 @@ export function findUngroundedClaims(
       issues.push({ type: "number", value: raw });
     }
   }
-  for (const email of response.match(EMAIL_PATTERN) ?? []) {
-    if (!corpus.includes(email.toLowerCase())) {
-      issues.push({ type: "email", value: email });
+  for (const match of response.matchAll(EMAIL_PATTERN)) {
+    if (!corpus.includes(match[0].toLowerCase())) {
+      issues.push({ type: "email", value: match[0] });
     }
   }
-  for (const uuid of response.match(UUID_PATTERN) ?? []) {
-    if (!corpus.includes(uuid.toLowerCase())) {
-      issues.push({ type: "uuid", value: uuid });
+  for (const match of response.matchAll(UUID_PATTERN)) {
+    if (!corpus.includes(match[0].toLowerCase())) {
+      issues.push({ type: "uuid", value: match[0] });
     }
   }
-  for (const status of response.match(STATUS_PATTERN) ?? []) {
-    if (!facts.strings.has(status.toLowerCase()) && !corpus.includes(status.toLowerCase())) {
-      issues.push({ type: "status", value: status });
+  for (const match of response.matchAll(STATUS_PATTERN)) {
+    if (!facts.strings.has(match[0].toLowerCase()) && !corpus.includes(match[0].toLowerCase())) {
+      issues.push({ type: "status", value: match[0] });
     }
   }
   return issues;

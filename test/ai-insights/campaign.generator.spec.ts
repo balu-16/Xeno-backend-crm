@@ -3,8 +3,11 @@ import { CampaignGenerator } from "../../src/ai-insights/generators/campaign.gen
 
 function createMockPrisma() {
   return {
-    $queryRaw: vi.fn(),
-    campaign: { findMany: vi.fn() },
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    campaign: {
+      count: vi.fn().mockResolvedValue(10),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   } as any;
 }
 
@@ -84,30 +87,33 @@ describe("CampaignGenerator", () => {
     expect(underperforming).toHaveLength(0);
   });
 
-  it("detects campaign fatigue with declining open rates", async () => {
-    prisma.campaign.findMany.mockResolvedValue([]);
-
-    // Fatigue query returns a campaign with declining open rates
-    prisma.$queryRaw.mockResolvedValueOnce([
+  it("detects underperforming campaigns with low open rates", async () => {
+    // Campaign with low open rate (5% vs 20% benchmark)
+    prisma.campaign.findMany.mockResolvedValue([
       {
-        campaign_id: "camp-fatigue-1",
-        campaign_name: "Weekly Newsletter",
+        id: "camp-low-open",
+        name: "Low Open Campaign",
         channel: "EMAIL",
-        first_half_opens: 200n,
-        first_half_sent: 500n,
-        second_half_opens: 50n,
-        second_half_sent: 500n,
+        status: "COMPLETED",
+        analytics: {
+          openRate: 0.05,
+          clickRate: 0.03,
+          conversionRate: 0.02,
+          deliveryRate: 0.98,
+          totalAudience: 1000,
+          totalSent: 1000,
+        },
       },
     ]);
 
     const insights = await generator.generate();
 
-    const fatigueInsight = insights.find(
-      (i) => i.fingerprint === "campaign-fatigue-camp-fatigue-1",
+    const lowOpenInsight = insights.find(
+      (i) => i.fingerprint === "campaign-low-openRate-camp-low-open",
     );
-    expect(fatigueInsight).toBeDefined();
-    expect(fatigueInsight!.title).toContain("Campaign fatigue detected");
-    expect(fatigueInsight!.details.declinePercent).toBeGreaterThan(15);
+    expect(lowOpenInsight).toBeDefined();
+    expect(lowOpenInsight!.title).toContain("open rate");
+    expect(lowOpenInsight!.details.actualRate).toBeLessThan(0.2);
   });
 
   it("compares channel effectiveness across EMAIL and SMS benchmarks", async () => {

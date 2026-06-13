@@ -215,7 +215,13 @@ export class AIProviderService {
         return "tool_use";
       case "content_filter":
         return "content_filter";
+      case "repetition_truncation":
+        return "repetition_truncation";
       default:
+        // Log unknown stop reasons for visibility instead of silently mapping to end_turn
+        if (reason) {
+          this.logger.warn(`Unknown Anthropic stop reason: ${reason}`);
+        }
         return reason ? "end_turn" : null;
     }
   }

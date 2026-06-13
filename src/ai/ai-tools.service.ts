@@ -557,9 +557,10 @@ export class AIToolsService {
     );
     if (generated) {
       try {
+        // Strip markdown code fences (handles fences anywhere in the string)
         const json = generated
-          .replace(/^```(?:json)?/i, "")
-          .replace(/```$/, "")
+          .replace(/```(?:json)?\s*/gi, "")
+          .replace(/```/g, "")
           .trim();
         rules = segmentRuleGroupSchema.parse(JSON.parse(json) as unknown);
       } catch {
@@ -605,8 +606,14 @@ export class AIToolsService {
     const goalKeywords = normalized.split(/\s+/).filter((word) => word.length > 3);
     const scored = await Promise.all(candidates.map(async (segment) => {
       const audienceSize = await this.segmentCompiler.count(segment.rules);
-      const rules = segment.rules as { conditions?: Array<{ field: string; value: unknown }> } | null;
-      const conditions = rules?.conditions ?? [];
+      const rawRules = segment.rules;
+      const conditions =
+        rawRules &&
+        typeof rawRules === "object" &&
+        "conditions" in rawRules &&
+        Array.isArray((rawRules as Record<string, unknown>).conditions)
+          ? ((rawRules as Record<string, unknown>).conditions as Array<{ field: string; value: unknown }>)
+          : [];
       const nameWords = segment.name.toLowerCase().split(/\s+/);
       const nameScore = nameWords.filter((word) => goalKeywords.includes(word)).length;
       let ruleScore = 0;

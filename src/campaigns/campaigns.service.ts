@@ -141,21 +141,26 @@ export class CampaignsService {
     if (campaign.status !== CampaignStatus.DRAFT) {
       throw new ConflictException("Only draft campaigns can be launched");
     }
-    const audience = await this.segments.match(campaign.segment.rules, {
-      limit: 10000,
-    });
-    if (audience.length === 0) {
-      throw new ConflictException("The selected segment has no customers");
-    }
     const correlationId = randomUUID();
     const occurredAt = new Date();
-    await this.prisma.$transaction(async (transaction) => {
+
+    // Audience fetch is inside the transaction to prevent TOCTOU race:
+    // no new customers can slip in between match and insert.
+    const { audience } = await this.prisma.$transaction(async (transaction) => {
+      const matched = await this.segments.match(campaign.segment.rules, {
+        limit: 10000,
+        tx: transaction,
+      });
+      if (matched.length === 0) {
+        throw new ConflictException("The selected segment has no customers");
+      }
+
       // Atomic conditional update — only succeeds if still DRAFT
       const updated = await transaction.campaign.updateMany({
         where: { id, status: CampaignStatus.DRAFT },
         data: {
           status: CampaignStatus.QUEUED,
-          audienceSizeSnapshot: audience.length,
+          audienceSizeSnapshot: matched.length,
           launchedAt: occurredAt,
         },
       });
@@ -170,12 +175,12 @@ export class CampaignsService {
           type: CampaignEventType.CampaignLaunched,
           campaignId: id,
           correlationId,
-          payload: toInputJson({ audienceSize: audience.length }),
+          payload: toInputJson({ audienceSize: matched.length }),
           occurredAt,
         },
       });
       await transaction.campaignEvent.createMany({
-        data: audience.map((customer) => ({
+        data: matched.map((customer) => ({
           eventId: randomUUID(),
           type: CampaignEventType.MessageQueued,
           campaignId: id,
@@ -186,7 +191,7 @@ export class CampaignsService {
         })),
       });
       await transaction.campaignLog.createMany({
-        data: audience.map((customer) => ({
+        data: matched.map((customer) => ({
           campaignId: id,
           customerId: customer.id,
           status: DeliveryStatus.QUEUED,
@@ -195,8 +200,10 @@ export class CampaignsService {
       });
       await transaction.campaignAnalytics.update({
         where: { campaignId: id },
-        data: { totalAudience: audience.length, totalQueued: audience.length },
+        data: { totalAudience: matched.length, totalQueued: matched.length },
       });
+
+      return { audience: matched };
     });
 
     const jobs: CampaignDispatchJob[] = audience.map((customer) => ({

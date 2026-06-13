@@ -174,6 +174,86 @@ export class RevenueGenerator implements InsightGenerator {
       }
     }
 
+    // ── Revenue concentration by segment ─────────────────────────
+    const segmentRevenue = await this.prisma.$queryRaw<
+      Array<{
+        segment: string;
+        revenue: Prisma.Decimal;
+        customer_count: bigint;
+      }>
+    >`
+      SELECT
+        s.name AS segment,
+        COALESCE(SUM(a."revenueAccrued"), 0) AS revenue,
+        COUNT(DISTINCT c.id)::bigint AS customer_count
+      FROM "Segment" s
+      JOIN "Campaign" camp ON camp."segmentId" = s.id
+      LEFT JOIN "CampaignAnalytics" a ON a."campaignId" = camp.id
+      LEFT JOIN "CampaignEvent" e ON e."campaignId" = camp.id
+        AND e.type = 'MessageConverted'::"CampaignEventType"
+      LEFT JOIN "Customer" c ON c.id = e."customerId"
+      GROUP BY s.id, s.name
+      HAVING COALESCE(SUM(a."revenueAccrued"), 0) > 0
+      ORDER BY revenue DESC
+    `;
+
+    if (segmentRevenue.length > 1) {
+      const totalSegmentRevenue = segmentRevenue.reduce(
+        (sum, r) => sum + Number(r.revenue),
+        0,
+      );
+      if (totalSegmentRevenue > 0) {
+        const topSegment = segmentRevenue[0];
+        const topShare = Number(topSegment.revenue) / totalSegmentRevenue;
+
+        if (topShare > 0.6) {
+          const confidenceFactors: ConfidenceFactor[] = [
+            {
+              factor: "concentration_level",
+              weight: 0.5,
+              direction: topShare > 0.8 ? "negative" : "positive",
+            },
+            {
+              factor: "segment_diversity",
+              weight: 0.3,
+              direction: segmentRevenue.length >= 3 ? "positive" : "negative",
+            },
+            {
+              factor: "revenue_size",
+              weight: 0.2,
+              direction: totalSegmentRevenue > 10000 ? "positive" : "negative",
+            },
+          ];
+
+          insights.push({
+            type: "REVENUE",
+            fingerprint: "revenue-concentration-risk",
+            title: "Revenue concentration risk",
+            summary: `${(topShare * 100).toFixed(1)}% of segment-driven revenue comes from "${topSegment.segment}". Over-reliance on a single segment increases risk.`,
+            details: {
+              topSegment: topSegment.segment,
+              topShare: Number(topShare.toFixed(4)),
+              topRevenue: Number(topSegment.revenue),
+              totalSegmentRevenue,
+              segmentCount: segmentRevenue.length,
+              segments: segmentRevenue.map((r) => ({
+                segment: r.segment,
+                revenue: Number(r.revenue),
+                customerCount: Number(r.customer_count),
+              })),
+            },
+            recommendation:
+              "Diversify revenue across more segments. Consider creating campaigns targeting underperforming or untapped segments to reduce concentration risk.",
+            estimatedImpact: `${(topShare * 100).toFixed(1)}% revenue concentration in one segment`,
+            confidenceScore: this.calculateConfidence(confidenceFactors),
+            confidenceFactors,
+            impactScore: Math.min(1, topShare),
+            expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+          });
+        }
+      }
+    }
+
     return insights;
   }
 

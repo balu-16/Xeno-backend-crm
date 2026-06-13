@@ -3,7 +3,8 @@ import { ChurnGenerator } from "../../src/ai-insights/generators/churn.generator
 
 function createMockPrisma() {
   return {
-    $queryRaw: vi.fn(),
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    customer: { count: vi.fn().mockResolvedValue(100) },
   } as any;
 }
 
@@ -41,12 +42,13 @@ describe("ChurnGenerator", () => {
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0]!.type).toBe("CHURN");
-    expect(insights[0]!.fingerprint).toBe("churn-high-risk-batch");
-    expect(insights[0]!.details.highRiskCount).toBe(1);
-    // churnScore should be high for this very inactive customer
-    expect(insights[0]!.details.avgChurnScore).toBeGreaterThan(0.7);
+    // Overview + high-risk batch
+    expect(insights).toHaveLength(2);
+    const batch = insights.find((i) => i.fingerprint === "churn-high-risk-batch");
+    expect(batch).toBeDefined();
+    expect(batch!.type).toBe("CHURN");
+    expect(batch!.details.highRiskCount).toBe(1);
+    expect(batch!.details.avgChurnScore).toBeGreaterThan(0.7);
   });
 
   it("classifies high/medium/low risk correctly", async () => {
@@ -83,8 +85,10 @@ describe("ChurnGenerator", () => {
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(1);
-    const topCustomers = insights[0]!.details.topRiskCustomers as any[];
+    // Overview + high-risk batch
+    expect(insights).toHaveLength(2);
+    const batch = insights.find((i) => i.fingerprint === "churn-high-risk-batch");
+    const topCustomers = batch!.details.topRiskCustomers as any[];
     expect(topCustomers.length).toBe(2);
     for (const customer of topCustomers) {
       expect(customer.riskLevel).toBe("HIGH");
@@ -110,7 +114,8 @@ describe("ChurnGenerator", () => {
 
     const insights = await generator.generate();
 
-    const breakdown = insights[0]!.details.factorBreakdown as Record<
+    const batch = insights.find((i) => i.fingerprint === "churn-high-risk-batch");
+    const breakdown = batch!.details.factorBreakdown as Record<
       string,
       { avgScore: number; affectedCount: number }
     >;
@@ -159,19 +164,23 @@ describe("ChurnGenerator", () => {
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0]!.details.highRiskCount).toBe(2);
+    // Overview + high-risk batch
+    expect(insights).toHaveLength(2);
+    const batch = insights.find((i) => i.fingerprint === "churn-high-risk-batch");
+    expect(batch!.details.highRiskCount).toBe(2);
     // impactScore = min(1, 2 / 50) = 0.04
-    expect(insights[0]!.impactScore).toBeCloseTo(0.04, 2);
+    expect(batch!.impactScore).toBeCloseTo(0.04, 2);
   });
 
-  it("handles customers with no order history (returns empty)", async () => {
-    // No customers returned from the query
+  it("handles customers with no order history (returns overview only)", async () => {
+    // No high-risk customers returned from the query
     prisma.$queryRaw.mockResolvedValueOnce([]);
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(0);
+    // Only the overview insight, no high-risk batch
+    expect(insights).toHaveLength(1);
+    expect(insights[0]!.fingerprint).toBe("churn-overview");
   });
 
   it("generates actionable recommendation", async () => {
@@ -193,8 +202,9 @@ describe("ChurnGenerator", () => {
 
     const insights = await generator.generate();
 
-    expect(insights[0]!.recommendation).toBeDefined();
-    expect(insights[0]!.recommendation.length).toBeGreaterThan(20);
-    expect(insights[0]!.recommendation).toContain("retention");
+    const batch = insights.find((i) => i.fingerprint === "churn-high-risk-batch");
+    expect(batch!.recommendation).toBeDefined();
+    expect(batch!.recommendation.length).toBeGreaterThan(20);
+    expect(batch!.recommendation).toContain("retention");
   });
 });

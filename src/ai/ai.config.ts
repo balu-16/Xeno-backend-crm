@@ -25,6 +25,9 @@ export const AI_CONFIG = {
   /** Number of recent messages injected into LLM context */
   HISTORY_LIMIT: Number(process.env.AI_HISTORY_LIMIT ?? 40),
 
+  /** Maximum number of request log entries kept in memory */
+  REQUEST_LOG_LIMIT: Number(process.env.AI_REQUEST_LOG_LIMIT ?? 200),
+
   /** Whether to enable decision logging */
   DECISION_LOG_ENABLED: process.env.AI_DECISION_LOG_ENABLED !== "false",
 
@@ -47,6 +50,7 @@ export function guardrailSummary(): Record<string, unknown> {
     maxTokensPerQuery: AI_CONFIG.MAX_TOKENS_PER_QUERY,
     confirmationTtlMs: AI_CONFIG.CONFIRMATION_TTL_MS,
     historyLimit: AI_CONFIG.HISTORY_LIMIT,
+    requestLogLimit: AI_CONFIG.REQUEST_LOG_LIMIT,
     decisionLogEnabled: AI_CONFIG.DECISION_LOG_ENABLED,
     retryMaxAttempts: AI_CONFIG.RETRY.MAX_ATTEMPTS,
     retryBackoffMs: AI_CONFIG.RETRY.BACKOFF_MS,

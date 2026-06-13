@@ -610,22 +610,89 @@ export class AIService {
         if (toolCallCount + toolUses.length > AI_CONFIG.MAX_TOOL_CALLS) {
           throw new Error(`AI tool call limit of ${AI_CONFIG.MAX_TOOL_CALLS} exceeded`);
         }
-        const toolResults: ProviderToolResultBlock[] = [];
-        for (const toolUse of toolUses) {
-          toolCallCount += 1;
-          const signature = `${toolUse.name}:${this.stableJson(toolUse.input)}`;
+        toolCallCount += toolUses.length;
 
-          let definition;
-          let validatedInput: Record<string, unknown>;
+        // Phase 1: Validate all tools and partition into confirmed vs executable
+        type ValidatedTool = {
+          toolUse: ProviderToolUseBlock;
+          definition: RegisteredAITool;
+          validatedInput: Record<string, unknown>;
+          signature: string;
+        };
+        const toExecute: ValidatedTool[] = [];
+        const toolResults: ProviderToolResultBlock[] = [];
+
+        for (const toolUse of toolUses) {
+          const signature = `${toolUse.name}:${this.stableJson(toolUse.input)}`;
           try {
-            const validated = this.registry.validate(
+            const { definition, input: validatedInput } = this.registry.validate(
               toolUse.name,
               toolUse.input,
               options.user
             );
-            definition = validated.definition;
-            validatedInput = validated.input;
+
+            if (definition.requiresConfirmation) {
+              // Confirmation tools are processed sequentially and short-circuit
+              const pending = await this.prisma.aIToolExecution.create({
+                data: {
+                  conversationId: options.conversationId,
+                  toolName: definition.name,
+                  providerCallId: toolUse.id,
+                  round,
+                  status: ToolExecutionStatus.PENDING_CONFIRMATION,
+                  input: toInputJson(validatedInput),
+                  requiresConfirmation: true
+                }
+              });
+              const view = this.executionView(pending);
+              executions.push(view);
+              signatures.add(signature);
+              const expiresAt = new Date(
+                pending.createdAt.getTime() + AI_CONFIG.CONFIRMATION_TTL_MS
+              ).toISOString();
+              options.onEvent?.({
+                type: "confirmation",
+                execution: view,
+                expiresAt
+              });
+              const response = [
+                `Confirmation required before **${definition.name}** can run.`,
+                "",
+                "Validated arguments:",
+                "```json",
+                JSON.stringify(validatedInput, null, 2),
+                "```"
+              ].join("\n");
+              await this.persistAssistant(
+                options.conversationId,
+                response,
+                executions,
+                results,
+                {
+                  confirmation: {
+                    executionId: pending.id,
+                    tool: definition.name,
+                    expiresAt
+                  }
+                }
+              );
+              return this.responsePayload(
+                options.conversationId,
+                "pending_confirmation",
+                response,
+                executions,
+                results,
+                {
+                  executionId: pending.id,
+                  tool: definition.name,
+                  expiresAt
+                }
+              );
+            }
+
+            toExecute.push({ toolUse, definition, validatedInput, signature });
           } catch (error) {
+            // Validation failed — record and return error to LLM
             const failed = await this.prisma.aIToolExecution.create({
               data: {
                 conversationId: options.conversationId,
@@ -647,132 +714,114 @@ export class AIService {
               content: JSON.stringify({ error: view.error }),
               is_error: true
             });
-            continue;
           }
+        }
 
-          if (definition.requiresConfirmation) {
-            const pending = await this.prisma.aIToolExecution.create({
+        // Phase 2: Fan out validated tools in parallel
+        if (toExecute.length > 0) {
+          const executeOne = async (
+            validated: ValidatedTool
+          ): Promise<{
+            toolUseId: string;
+            view: AIToolExecutionView;
+            resultBlock: ProviderToolResultBlock;
+            toolResult?: ToolResult;
+          }> => {
+            const { toolUse, definition, validatedInput, signature } = validated;
+            const started = await this.prisma.aIToolExecution.create({
               data: {
                 conversationId: options.conversationId,
                 toolName: definition.name,
                 providerCallId: toolUse.id,
                 round,
-                status: ToolExecutionStatus.PENDING_CONFIRMATION,
+                status: ToolExecutionStatus.STARTED,
                 input: toInputJson(validatedInput),
-                requiresConfirmation: true
+                requiresConfirmation: false
               }
             });
-            const view = this.executionView(pending);
-            executions.push(view);
-            signatures.add(signature);
-            const expiresAt = new Date(
-              pending.createdAt.getTime() + AI_CONFIG.CONFIRMATION_TTL_MS
-            ).toISOString();
             options.onEvent?.({
-              type: "confirmation",
-              execution: view,
-              expiresAt
+              type: "tool-call",
+              execution: this.executionView(started)
             });
-            const response = [
-              `Confirmation required before **${definition.name}** can run.`,
-              "",
-              "Validated arguments:",
-              "```json",
-              JSON.stringify(validatedInput, null, 2),
-              "```"
-            ].join("\n");
-            await this.persistAssistant(
-              options.conversationId,
-              response,
-              executions,
-              results,
-              {
-                confirmation: {
-                  executionId: pending.id,
-                  tool: definition.name,
-                  expiresAt
+
+            try {
+              const executed = await this.executeWithRetry(
+                definition,
+                validatedInput
+              );
+              const completed = await this.prisma.aIToolExecution.update({
+                where: { id: started.id },
+                data: {
+                  status: ToolExecutionStatus.COMPLETED,
+                  output: toInputJson(executed.result.output),
+                  sources: toInputJson(executed.result.sources),
+                  durationMs: executed.durationMs,
+                  completedAt: new Date()
                 }
-              }
-            );
-            return this.responsePayload(
-              options.conversationId,
-              "pending_confirmation",
-              response,
-              executions,
-              results,
-              {
-                executionId: pending.id,
-                tool: definition.name,
-                expiresAt
-              }
-            );
-          }
-
-          const started = await this.prisma.aIToolExecution.create({
-            data: {
-              conversationId: options.conversationId,
-              toolName: definition.name,
-              providerCallId: toolUse.id,
-              round,
-              status: ToolExecutionStatus.STARTED,
-              input: toInputJson(validatedInput),
-              requiresConfirmation: false
+              });
+              const view = this.executionView(completed);
+              options.onEvent?.({ type: "tool-result", execution: view });
+              signatures.add(signature);
+              return {
+                toolUseId: toolUse.id,
+                view,
+                resultBlock: this.toolResultBlock(toolUse.id, executed.result),
+                toolResult: executed.result
+              };
+            } catch (error) {
+              const isRetryable = this.isRetryableError(error);
+              const errorMsg = this.errorMessage(error);
+              this.logger.warn(
+                `Tool ${definition.name} failed (retryable=${isRetryable}): ${errorMsg}`
+              );
+              const failed = await this.prisma.aIToolExecution.update({
+                where: { id: started.id },
+                data: {
+                  status: ToolExecutionStatus.FAILED,
+                  error: errorMsg,
+                  completedAt: new Date()
+                }
+              });
+              const view = this.executionView(failed);
+              options.onEvent?.({ type: "tool-result", execution: view });
+              return {
+                toolUseId: toolUse.id,
+                view,
+                resultBlock: {
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: JSON.stringify({
+                    error: view.error,
+                    retryable: isRetryable
+                  }),
+                  is_error: true
+                }
+              };
             }
-          });
-          options.onEvent?.({
-            type: "tool-call",
-            execution: this.executionView(started)
-          });
+          };
 
-          try {
-            const executed = await this.executeWithRetry(
-              definition,
-              validatedInput
-            );
-            const completed = await this.prisma.aIToolExecution.update({
-              where: { id: started.id },
-              data: {
-                status: ToolExecutionStatus.COMPLETED,
-                output: toInputJson(executed.result.output),
-                sources: toInputJson(executed.result.sources),
-                durationMs: executed.durationMs,
-                completedAt: new Date()
+          const parallelResults = await Promise.all(
+            toExecute.map((v) => executeOne(v))
+          );
+
+          // Push execution views and collect results
+          const resultByToolUseId = new Map(
+            parallelResults.map((r) => [r.toolUseId, r])
+          );
+          for (const r of parallelResults) {
+            executions.push(r.view);
+          }
+          for (const toolUse of toolUses) {
+            const r = resultByToolUseId.get(toolUse.id);
+            if (r) {
+              toolResults.push(r.resultBlock);
+              if (r.toolResult) {
+                results.push(r.toolResult);
               }
-            });
-            const view = this.executionView(completed);
-            executions.push(view);
-            results.push(executed.result);
-            signatures.add(signature);
-            options.onEvent?.({ type: "tool-result", execution: view });
-            toolResults.push(this.toolResultBlock(toolUse.id, executed.result));
-          } catch (error) {
-            const isRetryable = this.isRetryableError(error);
-            const errorMsg = this.errorMessage(error);
-            this.logger.warn(
-              `Tool ${definition.name} failed (retryable=${isRetryable}): ${errorMsg}`
-            );
-            const failed = await this.prisma.aIToolExecution.update({
-              where: { id: started.id },
-              data: {
-                status: ToolExecutionStatus.FAILED,
-                error: errorMsg,
-                completedAt: new Date()
-              }
-            });
-            const view = this.executionView(failed);
-            executions.push(view);
-            options.onEvent?.({ type: "tool-result", execution: view });
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: toolUse.id,
-              content: JSON.stringify({
-                error: view.error,
-                retryable: isRetryable
-              }),
-              is_error: true
-            });
+            }
           }
         }
+
         messages.push({ role: "user", content: toolResults });
         continue;
       }
@@ -1082,7 +1131,7 @@ export class AIService {
 
   private pushLog(entry: RequestLog): void {
     this.requestLog.push(entry);
-    if (this.requestLog.length > 200) this.requestLog.shift();
+    if (this.requestLog.length > AI_CONFIG.REQUEST_LOG_LIMIT) this.requestLog.shift();
   }
 
   /** Execute a tool with retry for retryable errors */

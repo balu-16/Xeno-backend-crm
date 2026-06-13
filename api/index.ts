@@ -19,7 +19,7 @@ async function createApp() {
     { rawBody: true, bufferLogs: true }
   );
 
-  app.setGlobalPrefix("api");
+  app.setGlobalPrefix("api/v1");
   app.use(helmet());
   app.use(cookieParser());
 

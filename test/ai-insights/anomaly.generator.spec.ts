@@ -3,7 +3,8 @@ import { AnomalyGenerator } from "../../src/ai-insights/generators/anomaly.gener
 
 function createMockPrisma() {
   return {
-    $queryRaw: vi.fn(),
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    campaignLog: { count: vi.fn().mockResolvedValue(500) },
   } as any;
 }
 
@@ -23,16 +24,19 @@ describe("AnomalyGenerator", () => {
   });
 
   it("detects delivery failure spikes when current rate exceeds 2x baseline", async () => {
-    // Current failure rates
+    // Promise.all interleaving: spike-q1, degradation-q1, spike-q2, degradation-q2
+    // Spike current: EMAIL 150/1000 = 15% failure
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", total_sent: 1000n, total_failed: 150n },
     ]);
-    // Baseline stats
+    // Degradation current: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+    // Spike baseline: 5% normal rate
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", avg_failure_rate: 0.05, std_dev: 0.02 },
     ]);
-    // Channel degradation queries (current 7-day, baseline 30-day)
-    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    // Degradation baseline: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
 
     const insights = await generator.generate();
 
@@ -47,14 +51,16 @@ describe("AnomalyGenerator", () => {
   });
 
   it("detects channel degradation when delivery rate drops below baseline", async () => {
-    // Failure spike queries (no spikes)
-    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
-
-    // Channel degradation: current 7-day
+    // Promise.all interleaving: spike-q1, degradation-q1, spike-q2, degradation-q2
+    // Spike current: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+    // Degradation current: SMS 350/500 = 70% delivery
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "SMS", total: 500n, delivered: 350n },
     ]);
-    // Channel degradation: baseline 30-day
+    // Spike baseline: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+    // Degradation baseline: SMS normal 95%
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "SMS", avg_delivery_rate: 0.95, std_dev: 0.03 },
     ]);
@@ -71,13 +77,16 @@ describe("AnomalyGenerator", () => {
   });
 
   it("calculates standard deviation correctly for baseline comparison", async () => {
-    // No failure spikes
-    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
-
-    // Channel degradation: current well below baseline - 2*sigma
+    // Promise.all interleaving: spike-q1, degradation-q1, spike-q2, degradation-q2
+    // Spike current: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+    // Degradation current: EMAIL 140/200 = 70%
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", total: 200n, delivered: 140n },
     ]);
+    // Spike baseline: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+    // Degradation baseline: EMAIL normal 92%, stdDev 5%
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", avg_delivery_rate: 0.92, std_dev: 0.05 },
     ]);
@@ -97,36 +106,46 @@ describe("AnomalyGenerator", () => {
     );
   });
 
-  it("handles insufficient data gracefully by not generating insights", async () => {
-    // Failure spike: too few messages (< 10)
+  it("handles insufficient data gracefully by not generating anomaly insights", async () => {
+    // Promise.all interleaving: spike-q1, degradation-q1, spike-q2, degradation-q2
+    // Spike current: too few messages (< 10)
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", total_sent: 5n, total_failed: 2n },
     ]);
-    prisma.$queryRaw.mockResolvedValueOnce([
-      { channel: "EMAIL", avg_failure_rate: 0.05, std_dev: 0.02 },
-    ]);
-    // Channel degradation: too few messages (< 20)
+    // Degradation current: too few messages (< 20)
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", total: 10n, delivered: 8n },
     ]);
+    // Spike baseline
+    prisma.$queryRaw.mockResolvedValueOnce([
+      { channel: "EMAIL", avg_failure_rate: 0.05, std_dev: 0.02 },
+    ]);
+    // Degradation baseline
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", avg_delivery_rate: 0.95, std_dev: 0.03 },
     ]);
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(0);
+    // Only the overview insight, no anomaly insights
+    expect(insights).toHaveLength(1);
+    expect(insights[0]!.fingerprint).toBe("anomaly-overview");
   });
 
   it("generates appropriate urgency via confidence and impact scores", async () => {
-    // Severe failure spike
+    // Promise.all interleaving: spike-q1, degradation-q1, spike-q2, degradation-q2
+    // Spike current: EMAIL 500/2000 = 25% failure
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", total_sent: 2000n, total_failed: 500n },
     ]);
+    // Degradation current: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+    // Spike baseline: 3% normal
     prisma.$queryRaw.mockResolvedValueOnce([
       { channel: "EMAIL", avg_failure_rate: 0.03, std_dev: 0.01 },
     ]);
-    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    // Degradation baseline: none
+    prisma.$queryRaw.mockResolvedValueOnce([]);
 
     const insights = await generator.generate();
 

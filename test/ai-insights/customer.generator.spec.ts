@@ -3,8 +3,8 @@ import { CustomerGenerator } from "../../src/ai-insights/generators/customer.gen
 
 function createMockPrisma() {
   return {
-    $queryRaw: vi.fn(),
-    customer: { count: vi.fn() },
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    customer: { count: vi.fn().mockResolvedValue(100) },
   } as any;
 }
 
@@ -26,6 +26,8 @@ describe("CustomerGenerator", () => {
   it("detects inactive customers at 30/60/90 day thresholds", async () => {
     prisma.customer.count.mockResolvedValue(100);
 
+    // active customers with orders
+    prisma.$queryRaw.mockResolvedValueOnce([{ count: 80n }]);
     // 30-day inactive
     prisma.$queryRaw.mockResolvedValueOnce([
       { inactive_count: 25n, revenue_at_risk: 12500, avg_order_value: 500 },
@@ -41,21 +43,27 @@ describe("CustomerGenerator", () => {
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(3);
+    expect(insights).toHaveLength(4);
 
     const fingerprints = insights.map((i) => i.fingerprint);
+    expect(fingerprints).toContain("customer-overview");
     expect(fingerprints).toContain("inactive-customers-30d");
     expect(fingerprints).toContain("inactive-customers-60d");
     expect(fingerprints).toContain("inactive-customers-90d");
 
-    expect(insights[0]!.details.severity).toBe("moderate");
-    expect(insights[1]!.details.severity).toBe("high");
-    expect(insights[2]!.details.severity).toBe("critical");
+    const thirty = insights.find((i) => i.fingerprint === "inactive-customers-30d");
+    const sixty = insights.find((i) => i.fingerprint === "inactive-customers-60d");
+    const ninety = insights.find((i) => i.fingerprint === "inactive-customers-90d");
+    expect(thirty!.details.severity).toBe("moderate");
+    expect(sixty!.details.severity).toBe("high");
+    expect(ninety!.details.severity).toBe("critical");
   });
 
   it("identifies returning customers by having no inactive insight when all are active", async () => {
     prisma.customer.count.mockResolvedValue(50);
 
+    // active customers with orders
+    prisma.$queryRaw.mockResolvedValueOnce([{ count: 50n }]);
     // All thresholds return zero inactive
     prisma.$queryRaw
       .mockResolvedValueOnce([{ inactive_count: 0n, revenue_at_risk: 0, avg_order_value: 0 }])
@@ -64,12 +72,16 @@ describe("CustomerGenerator", () => {
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(0);
+    // Only the overview insight, no inactive insights
+    expect(insights).toHaveLength(1);
+    expect(insights[0]!.fingerprint).toBe("customer-overview");
   });
 
   it("identifies high-value customers (top 10%) via revenue at risk ratio", async () => {
     prisma.customer.count.mockResolvedValue(100);
 
+    // active customers with orders
+    prisma.$queryRaw.mockResolvedValueOnce([{ count: 90n }]);
     // 30-day: 10 inactive customers with high revenue at risk
     prisma.$queryRaw.mockResolvedValueOnce([
       { inactive_count: 10n, revenue_at_risk: 50000, avg_order_value: 5000 },
@@ -93,6 +105,8 @@ describe("CustomerGenerator", () => {
   it("calculates customer count accurately", async () => {
     prisma.customer.count.mockResolvedValue(200);
 
+    // active customers with orders
+    prisma.$queryRaw.mockResolvedValueOnce([{ count: 150n }]);
     prisma.$queryRaw.mockResolvedValueOnce([
       { inactive_count: 42n, revenue_at_risk: 21000, avg_order_value: 500 },
     ]);
@@ -105,14 +119,17 @@ describe("CustomerGenerator", () => {
 
     const insights = await generator.generate();
 
-    expect(insights[0]!.details.inactiveCount).toBe(42);
-    expect(insights[0]!.details.totalCustomers).toBe(200);
-    expect(insights[0]!.details.inactiveRatio).toBeCloseTo(0.21, 2);
+    const thirty = insights.find((i) => i.fingerprint === "inactive-customers-30d");
+    expect(thirty!.details.inactiveCount).toBe(42);
+    expect(thirty!.details.totalCustomers).toBe(200);
+    expect(thirty!.details.inactiveRatio).toBeCloseTo(0.21, 2);
   });
 
   it("generates proper recommendation text based on threshold severity", async () => {
     prisma.customer.count.mockResolvedValue(100);
 
+    // active customers with orders
+    prisma.$queryRaw.mockResolvedValueOnce([{ count: 80n }]);
     // 30-day
     prisma.$queryRaw.mockResolvedValueOnce([
       { inactive_count: 20n, revenue_at_risk: 10000, avg_order_value: 500 },
@@ -139,11 +156,14 @@ describe("CustomerGenerator", () => {
 
   it("handles zero-customer edge case", async () => {
     prisma.customer.count.mockResolvedValue(0);
+    // active customers query still runs for the overview
+    prisma.$queryRaw.mockResolvedValueOnce([{ count: 0n }]);
 
     const insights = await generator.generate();
 
-    expect(insights).toHaveLength(0);
-    // $queryRaw should never have been called
-    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    // Only the overview insight, no inactive insights
+    expect(insights).toHaveLength(1);
+    expect(insights[0]!.fingerprint).toBe("customer-overview");
+    expect(insights[0]!.details.totalCustomers).toBe(0);
   });
 });

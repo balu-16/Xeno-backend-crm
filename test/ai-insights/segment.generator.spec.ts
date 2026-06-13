@@ -3,7 +3,9 @@ import { SegmentGenerator } from "../../src/ai-insights/generators/segment.gener
 
 function createMockPrisma() {
   return {
-    $queryRaw: vi.fn(),
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    segment: { count: vi.fn().mockResolvedValue(5) },
+    customer: { count: vi.fn().mockResolvedValue(100) },
   } as any;
 }
 

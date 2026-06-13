@@ -23,6 +23,7 @@ export class SegmentCompilerService {
     { value: number; expiresAt: number }
   >();
   private readonly CACHE_TTL_MS = 30_000;
+  private readonly MAX_CACHE_SIZE = 256;
 
   validate(rules: unknown): SegmentRuleGroup {
     return segmentRuleGroupSchema.parse(rules);
@@ -74,13 +75,14 @@ export class SegmentCompilerService {
 
   async match(
     rawRules: unknown,
-    options: { limit?: number; offset?: number } = {}
+    options: { limit?: number; offset?: number; tx?: Prisma.TransactionClient } = {}
   ): Promise<SegmentMatchRow[]> {
     const rules = this.validate(rawRules);
     const where = this.compileGroup(rules);
     const limit = options.limit ?? 100;
     const offset = options.offset ?? 0;
-    return this.prisma.$queryRaw<SegmentMatchRow[]>(Prisma.sql`
+    const client = options.tx ?? this.prisma;
+    return client.$queryRaw<SegmentMatchRow[]>(Prisma.sql`
       WITH customer_metrics AS (
         SELECT
           c.id,
@@ -143,6 +145,13 @@ export class SegmentCompilerService {
       WHERE ${where}
     `);
     const result = Number(rows[0]?.count ?? 0);
+    // Evict oldest entry if cache is full
+    if (this.countCache.size >= this.MAX_CACHE_SIZE) {
+      const oldestKey = this.countCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.countCache.delete(oldestKey);
+      }
+    }
     this.countCache.set(cacheKey, {
       value: result,
       expiresAt: Date.now() + this.CACHE_TTL_MS

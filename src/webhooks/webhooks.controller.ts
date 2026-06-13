@@ -41,7 +41,14 @@ export class WebhooksController {
     @Req() request: RawRequest,
     @Headers("x-xeno-signature") suppliedSignature?: string
   ) {
-    const raw = request.rawBody ?? Buffer.from(JSON.stringify(request.body));
+    // rawBody is set by NestJS { rawBody: true } — if missing, the body was
+    // already consumed and we cannot reconstruct the exact bytes for HMAC.
+    if (!request.rawBody) {
+      throw new UnauthorizedException(
+        "Cannot verify webhook signature: raw body unavailable"
+      );
+    }
+    const raw = request.rawBody;
     const expected = createHmac(
       "sha256",
       this.config.get("CHANNEL_WEBHOOK_SECRET", { infer: true })

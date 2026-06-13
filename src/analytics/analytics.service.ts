@@ -28,6 +28,16 @@ function rate(numerator: number, denominator: number): number {
     : Math.round((numerator / denominator) * 10000) / 100;
 }
 
+function safeBigintToNumber(value: bigint | number | Prisma.Decimal | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return value;
+  // Prisma Decimal has a .toNumber() method
+  if (typeof value === "object" && "toNumber" in value && typeof value.toNumber === "function") {
+    return value.toNumber();
+  }
+  return Number(value);
+}
+
 @Injectable()
 export class AnalyticsService {
   constructor(
@@ -72,13 +82,13 @@ export class AnalyticsService {
       WHERE e."campaignId" = ${campaignId}
     `);
     const aggregate = rows[0];
-    const sent = Number(aggregate?.sent ?? 0);
-    const delivered = Number(aggregate?.delivered ?? 0);
-    const opened = Number(aggregate?.opened ?? 0);
-    const clicked = Number(aggregate?.clicked ?? 0);
-    const converted = Number(aggregate?.converted ?? 0);
-    const failed = Number(aggregate?.failed ?? 0);
-    const revenue = Number(aggregate?.revenue ?? 0);
+    const sent = safeBigintToNumber(aggregate?.sent);
+    const delivered = safeBigintToNumber(aggregate?.delivered);
+    const opened = safeBigintToNumber(aggregate?.opened);
+    const clicked = safeBigintToNumber(aggregate?.clicked);
+    const converted = safeBigintToNumber(aggregate?.converted);
+    const failed = safeBigintToNumber(aggregate?.failed);
+    const revenue = safeBigintToNumber(aggregate?.revenue);
     const pending = await this.prisma.campaignLog.count({
       where: {
         campaignId,
@@ -380,20 +390,20 @@ export class AnalyticsService {
       conversionRate: rate(converted, sent),
       campaignPerformance: campaignTrend.map((row) => ({
         date: row.date.toISOString(),
-        sent: Number(row.sent),
-        converted: Number(row.converted)
+        sent: safeBigintToNumber(row.sent),
+        converted: safeBigintToNumber(row.converted)
       })),
       revenueTrends: revenueTrend.map((row) => ({
         date: row.date.toISOString(),
-        revenue: Number(row.revenue)
+        revenue: safeBigintToNumber(row.revenue)
       })),
       channelPerformance: channelRows.map((row) => ({
         channel: row.channel,
-        rate: rate(Number(row.converted), Number(row.sent))
+        rate: rate(safeBigintToNumber(row.converted), safeBigintToNumber(row.sent))
       })),
       segmentPerformance: segmentRows.map((row) => ({
         segment: row.segment,
-        conversions: Number(row.conversions)
+        conversions: safeBigintToNumber(row.conversions)
       })),
       activity,
       generatedAt: new Date().toISOString()
@@ -447,18 +457,18 @@ export class AnalyticsService {
     return rows.map((row) => ({
       segmentId: row.segmentId,
       segment: row.segment,
-      campaigns: Number(row.campaigns),
-      audience: Number(row.audience),
-      sent: Number(row.sent),
-      delivered: Number(row.delivered),
-      opened: Number(row.opened),
-      clicked: Number(row.clicked),
-      converted: Number(row.converted),
-      revenue: Number(row.revenue),
-      deliveryRate: rate(Number(row.delivered), Number(row.sent)),
-      openRate: rate(Number(row.opened), Number(row.sent)),
-      clickRate: rate(Number(row.clicked), Number(row.sent)),
-      conversionRate: rate(Number(row.converted), Number(row.sent))
+      campaigns: safeBigintToNumber(row.campaigns),
+      audience: safeBigintToNumber(row.audience),
+      sent: safeBigintToNumber(row.sent),
+      delivered: safeBigintToNumber(row.delivered),
+      opened: safeBigintToNumber(row.opened),
+      clicked: safeBigintToNumber(row.clicked),
+      converted: safeBigintToNumber(row.converted),
+      revenue: safeBigintToNumber(row.revenue),
+      deliveryRate: rate(safeBigintToNumber(row.delivered), safeBigintToNumber(row.sent)),
+      openRate: rate(safeBigintToNumber(row.opened), safeBigintToNumber(row.sent)),
+      clickRate: rate(safeBigintToNumber(row.clicked), safeBigintToNumber(row.sent)),
+      conversionRate: rate(safeBigintToNumber(row.converted), safeBigintToNumber(row.sent))
     }));
   }
 
@@ -562,10 +572,10 @@ export class AnalyticsService {
       })),
       channels: channelRows.map((row) => ({
         channel: row.channel,
-        sent: Number(row.sent),
-        delivered: Number(row.delivered),
-        failed: Number(row.failed),
-        deliveryRate: rate(Number(row.delivered), Number(row.sent))
+        sent: safeBigintToNumber(row.sent),
+        delivered: safeBigintToNumber(row.delivered),
+        failed: safeBigintToNumber(row.failed),
+        deliveryRate: rate(safeBigintToNumber(row.delivered), safeBigintToNumber(row.sent))
       }))
     };
   }

@@ -3,9 +3,9 @@ import { RevenueGenerator } from "../../src/ai-insights/generators/revenue.gener
 
 function createMockPrisma() {
   return {
-    $queryRaw: vi.fn(),
-    customer: { count: vi.fn() },
-    campaign: { findMany: vi.fn() },
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    customer: { count: vi.fn().mockResolvedValue(100) },
+    campaign: { findMany: vi.fn().mockResolvedValue([]) },
   } as any;
 }
 
@@ -85,6 +85,8 @@ describe("RevenueGenerator", () => {
         { period: "current", revenue: 5000, order_count: 50n },
         { period: "previous", revenue: 5000, order_count: 50n },
       ])
+      // all-time totals
+      .mockResolvedValueOnce([{ total: 50000, count: 500n }])
       // concentration: 75% in high_frequency
       .mockResolvedValueOnce([
         { segment: "high_frequency", revenue: 7500, customer_count: 5n },
