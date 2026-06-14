@@ -57,7 +57,9 @@ export class AuthController {
     return {
       httpOnly: true,
       secure: production,
-      sameSite: (production ? "strict" : "lax") as "strict" | "lax",
+      // "none" is required for cross-origin cookies (frontend & backend on different domains).
+      // "strict" blocks cookies on cross-origin requests, breaking the dashboard after login.
+      sameSite: (production ? "none" : "lax") as "none" | "lax",
       path: "/"
     };
   }
