@@ -134,7 +134,7 @@ async function main(): Promise<void> {
     for (let j = 0; j < orderCount; j++) {
       orders.push({
         id: randomUUID(),
-        customerId: customer.id,
+        customerId: customer.id!,
         amount: new Prisma.Decimal(
           (randomInt(100, 15000) + randomInt(0, 99) / 100).toFixed(2)
         ),
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
   for (const c of customers) {
     const city = (c.metadata as Record<string, unknown>).city as string;
     cityDistribution[city] = (cityDistribution[city] ?? 0) + 1;
-    for (const t of c.tags) {
+    for (const t of c.tags as string[]) {
       tagDistribution[t] = (tagDistribution[t] ?? 0) + 1;
     }
   }
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
       c.email.padEnd(38),
       c.phone.padEnd(15),
       String(meta.city).padEnd(12),
-      c.tags.join(", ")
+      (c.tags as string[]).join(", ")
     );
   }
 
