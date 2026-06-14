@@ -3,14 +3,13 @@ import { NestFactory } from "@nestjs/core";
 import { ExpressAdapter } from "@nestjs/platform-express";
 import { ValidationPipe } from "@nestjs/common";
 import cookieParser from "cookie-parser";
-import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import type { NextFunction, Request, Response } from "express";
 import serverless from "serverless-http";
 import { AppModule } from "../src/app.module";
 
-let cachedHandler: ReturnType<typeof serverless>;
+let cachedHandler: ReturnType<typeof serverless> | null = null;
 
 const allowedOrigins = [
   process.env.FRONTEND_URL,
@@ -21,32 +20,32 @@ const allowedOrigins = [
 async function createApp() {
   const expressApp = express();
 
-  // CORS must be applied BEFORE NestJS to handle OPTIONS preflight
-  expressApp.use(
-    cors({
-      origin: (
-        origin: string | undefined,
-        callback: (err: Error | null, allow: boolean) => void,
-      ) => {
-        // Allow requests with no origin (server-to-server, curl, mobile apps)
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(null, false);
-        }
-      },
-      credentials: true,
-      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
-    }),
-  );
-
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
     rawBody: true,
     bufferLogs: true,
   });
 
   app.setGlobalPrefix("api/v1");
+
+  // CORS — must be configured via NestJS so it runs BEFORE route handlers.
+  // NestJS middleware executes ahead of Express-level middleware on the same app,
+  // so `app.enableCors({ origin: false })` was blocking the express cors() layer.
+  app.enableCors({
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow: boolean) => void,
+    ) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+  });
+
   app.use(
     helmet({
       crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -66,10 +65,6 @@ async function createApp() {
     next();
   });
 
-  // Disable NestJS-level CORS — already handled by express cors() above
-  // This prevents double CORS headers
-  app.enableCors({ origin: false });
-
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -82,10 +77,29 @@ async function createApp() {
   return expressApp;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 export default async function handler(req: Request, res: Response) {
   if (!cachedHandler) {
-    const app = await createApp();
-    cachedHandler = serverless(app, { binary: false });
+    try {
+      const app = await withTimeout(createApp(), 8000, "NestJS app init");
+      cachedHandler = serverless(app, { binary: false });
+    } catch (error) {
+      console.error("Failed to initialize NestJS app:", error);
+      res.status(503).json({
+        success: false,
+        error: { message: "Service temporarily unavailable — app failed to start" },
+      });
+      return;
+    }
   }
   return cachedHandler(req, res);
 }

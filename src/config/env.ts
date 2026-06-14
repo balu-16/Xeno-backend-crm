@@ -19,10 +19,30 @@ const envSchema = z.object({
 
 export type Environment = z.infer<typeof envSchema>;
 
+function ensureConnectTimeout(url: string, seconds = 5): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return url.includes("connect_timeout")
+    ? url
+    : `${url}${separator}connect_timeout=${seconds}`;
+}
+
 export function validateEnvironment(config: Record<string, unknown>) {
+  // Strip empty strings so Zod defaults can kick in.
+  // Vercel may set env vars to "" which bypasses .default() in Zod.
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (value !== "") {
+      cleaned[key] = value;
+    }
+  }
+
+  const rawDbUrl = cleaned.DATABASE_URL as string;
   const normalized = {
-    ...config,
-    DIRECT_URL: (config.DIRECT_URL as string) ?? (config.DATABASE_URL as string),
+    ...cleaned,
+    DATABASE_URL: ensureConnectTimeout(rawDbUrl),
+    DIRECT_URL: ensureConnectTimeout(
+      (cleaned.DIRECT_URL as string) ?? rawDbUrl,
+    ),
   };
   return envSchema.parse(normalized);
 }

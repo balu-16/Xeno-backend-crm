@@ -10,7 +10,13 @@ export class PrismaService
 
   async onModuleInit(): Promise<void> {
     try {
-      await this.$connect();
+      // Wrap $connect in a timeout so the app doesn't hang forever if the DB is unreachable
+      await Promise.race([
+        this.$connect(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Database connection timed out after 5s")), 5000),
+        ),
+      ]);
       this.connected = true;
     } catch (error) {
       // Don't crash on startup — the DB might not be reachable yet.
