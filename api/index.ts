@@ -6,10 +6,9 @@ import cookieParser from "cookie-parser";
 import express from "express";
 import helmet from "helmet";
 import type { NextFunction, Request, Response } from "express";
-import serverless from "serverless-http";
 import { AppModule } from "../src/app.module";
 
-let cachedHandler: ReturnType<typeof serverless> | null = null;
+let cachedApp: express.Express | null = null;
 
 const allowedOrigins = [
   process.env.FRONTEND_URL,
@@ -27,9 +26,6 @@ async function createApp() {
 
   app.setGlobalPrefix("api/v1");
 
-  // CORS — must be configured via NestJS so it runs BEFORE route handlers.
-  // NestJS middleware executes ahead of Express-level middleware on the same app,
-  // so `app.enableCors({ origin: false })` was blocking the express cors() layer.
   app.enableCors({
     origin: (
       origin: string | undefined,
@@ -88,10 +84,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export default async function handler(req: Request, res: Response) {
-  if (!cachedHandler) {
+  if (!cachedApp) {
     try {
-      const app = await withTimeout(createApp(), 8000, "NestJS app init");
-      cachedHandler = serverless(app, { binary: false });
+      cachedApp = await withTimeout(createApp(), 8000, "NestJS app init");
     } catch (error) {
       console.error("Failed to initialize NestJS app:", error);
       res.status(503).json({
@@ -101,5 +96,6 @@ export default async function handler(req: Request, res: Response) {
       return;
     }
   }
-  return cachedHandler(req, res);
+  // Express apps are request handlers — call directly, no serverless-http needed.
+  cachedApp(req, res);
 }
