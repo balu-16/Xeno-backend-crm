@@ -28,13 +28,20 @@ function createMockPrisma() {
   };
 }
 
+function createMockSegmentCompiler() {
+  return {
+    validate: vi.fn((rules: unknown) => rules),
+    count: vi.fn().mockResolvedValue(0),
+  };
+}
+
 describe("ActionService", () => {
   let service: ActionService;
   let prisma: ReturnType<typeof createMockPrisma>;
 
   beforeEach(() => {
     prisma = createMockPrisma();
-    service = new ActionService(prisma as any);
+    service = new ActionService(prisma as any, createMockSegmentCompiler() as any);
   });
 
   describe("createActions", () => {

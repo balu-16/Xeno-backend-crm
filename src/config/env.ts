@@ -19,11 +19,14 @@ const envSchema = z.object({
 
 export type Environment = z.infer<typeof envSchema>;
 
+const NEON_URL =
+  "postgresql://neondb_owner:npg_GzBkbE6YC2jH@ep-mute-wildflower-aov505bx.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require";
+
 export function validateEnvironment(config: Record<string, unknown>): Environment {
   const normalized = {
     ...config,
-    DATABASE_URL: config.DATABASE_URL ?? config.NEON_DB,
-    DIRECT_URL: config.DIRECT_URL ?? config.DATABASE_URL ?? config.NEON_DB
+    DATABASE_URL: config.DATABASE_URL ?? config.NEON_DB ?? NEON_URL,
+    DIRECT_URL: config.DIRECT_URL ?? config.DATABASE_URL ?? config.NEON_DB ?? NEON_URL
   };
   return envSchema.parse(normalized);
 }

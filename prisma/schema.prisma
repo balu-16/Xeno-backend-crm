@@ -11,7 +11,12 @@ datasource db {
 enum UserRole {
   ADMIN
   MANAGER
-  MEMBER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum ChannelType {
@@ -71,7 +76,8 @@ model User {
   email            String              @unique
   passwordHash     String
   emailVerified    Boolean             @default(false)
-  role             UserRole            @default(MEMBER)
+  role             UserRole            @default(MANAGER)
+  approvalStatus   ApprovalStatus      @default(PENDING)
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
   conversations    AIConversation[]

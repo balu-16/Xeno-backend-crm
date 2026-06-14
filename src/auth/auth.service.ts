@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException
 } from "@nestjs/common";
@@ -14,13 +15,14 @@ export type AuthenticatedUser = {
   id: string;
   email: string;
   name: string;
-  role: "ADMIN" | "MANAGER" | "MEMBER";
+  role: "ADMIN" | "MANAGER";
+  approvalStatus: "PENDING" | "APPROVED" | "REJECTED";
 };
 
 type JwtPayload = {
   sub: string;
   email: string;
-  role: "ADMIN" | "MANAGER" | "MEMBER";
+  role: "ADMIN" | "MANAGER";
 };
 
 const REFRESH_TOKEN_TTL_DAYS = 7;
@@ -55,7 +57,7 @@ export class AuthService {
     const tokenHash = this.hashToken(refreshToken);
     const stored = await this.prisma.refreshToken.findUnique({
       where: { tokenHash },
-      include: { user: { select: { id: true, email: true, name: true, role: true } } }
+      include: { user: { select: { id: true, email: true, name: true, role: true, approvalStatus: true } } }
     });
     if (!stored || stored.expiresAt < new Date()) {
       // Clean up expired token if found
@@ -80,7 +82,7 @@ export class AuthService {
     return {
       token: accessToken,
       refreshToken: newRefreshToken,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role }
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, approvalStatus: user.approvalStatus }
     } as { token: string; user: AuthenticatedUser } & { refreshToken: string };
   }
 
@@ -108,6 +110,16 @@ export class AuthService {
     });
     if (!user || !(await verify(user.passwordHash, password))) {
       throw new UnauthorizedException("Invalid email or password");
+    }
+    if (user.approvalStatus === "PENDING") {
+      throw new ForbiddenException(
+        "Your account is pending admin approval. Please wait for an admin to approve your account."
+      );
+    }
+    if (user.approvalStatus === "REJECTED") {
+      throw new ForbiddenException(
+        "Your account has been rejected by an admin."
+      );
     }
     const role = user.role;
     const payload: JwtPayload = {
@@ -138,7 +150,8 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
-        role
+        role,
+        approvalStatus: user.approvalStatus
       }
     };
   }
@@ -149,7 +162,7 @@ export class AuthService {
     password: string,
     _ip?: string,
     _userAgent?: string
-  ): Promise<{ token: string; refreshToken: string; user: AuthenticatedUser }> {
+  ): Promise<{ pendingApproval: true; message: string }> {
     const existing = await this.prisma.user.findUnique({
       where: { email: email.toLowerCase() }
     });
@@ -157,33 +170,19 @@ export class AuthService {
       throw new ConflictException("An account with this email already exists");
     }
     const passwordHash = await hash(password);
-    const user = await this.prisma.user.create({
+    await this.prisma.user.create({
       data: {
         name: name.trim(),
         email: email.toLowerCase(),
         passwordHash,
-        role: "MEMBER"
+        role: "MANAGER",
+        approvalStatus: "PENDING"
       }
     });
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role
-    };
-    const token = await this.jwt.signAsync(payload, {
-      secret: this.config.get("JWT_SECRET", { infer: true }),
-      expiresIn: this.config.get("JWT_EXPIRES_IN", { infer: true })
-    });
-    const refreshToken = await this.generateRefreshToken(user.id);
     return {
-      token,
-      refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role
-      }
+      pendingApproval: true,
+      message:
+        "Your account has been created and is pending admin approval. You will be able to sign in once an admin approves your account."
     };
   }
 
@@ -194,17 +193,110 @@ export class AuthService {
       });
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, email: true, name: true, role: true }
+        select: { id: true, email: true, name: true, role: true, approvalStatus: true }
       });
       if (!user) {
         throw new UnauthorizedException();
       }
       return {
         ...user,
-        role: user.role
+        role: user.role,
+        approvalStatus: user.approvalStatus
       };
     } catch {
       throw new UnauthorizedException("Authentication required");
     }
+  }
+
+  async getPendingManagers(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      email: string;
+      createdAt: Date;
+    }>
+  > {
+    return this.prisma.user.findMany({
+      where: { role: "MANAGER", approvalStatus: "PENDING" },
+      select: { id: true, name: true, email: true, createdAt: true },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  async getAllManagers(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      email: string;
+      approvalStatus: "PENDING" | "APPROVED" | "REJECTED";
+      createdAt: Date;
+    }>
+  > {
+    return this.prisma.user.findMany({
+      where: { role: "MANAGER" },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        approvalStatus: true,
+        createdAt: true
+      },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  async approveManager(
+    managerId: string
+  ): Promise<{ id: string; name: string; email: string; approvalStatus: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: managerId }
+    });
+    if (!user || user.role !== "MANAGER") {
+      throw new ConflictException("Manager not found");
+    }
+    const updated = await this.prisma.user.update({
+      where: { id: managerId },
+      data: { approvalStatus: "APPROVED" },
+      select: { id: true, name: true, email: true, approvalStatus: true }
+    });
+    return updated;
+  }
+
+  async rejectManager(
+    managerId: string
+  ): Promise<{ id: string; name: string; email: string; approvalStatus: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: managerId }
+    });
+    if (!user || user.role !== "MANAGER") {
+      throw new ConflictException("Manager not found");
+    }
+    const updated = await this.prisma.user.update({
+      where: { id: managerId },
+      data: { approvalStatus: "REJECTED" },
+      select: { id: true, name: true, email: true, approvalStatus: true }
+    });
+    // Revoke all tokens so they can't stay logged in
+    await this.revokeAllUserTokens(managerId);
+    return updated;
+  }
+
+  async deleteManager(
+    managerId: string
+  ): Promise<{ id: string; name: string; email: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: managerId }
+    });
+    if (!user || user.role !== "MANAGER") {
+      throw new ConflictException("Manager not found");
+    }
+    // Revoke all tokens first
+    await this.revokeAllUserTokens(managerId);
+    // Delete the user
+    const deleted = await this.prisma.user.delete({
+      where: { id: managerId },
+      select: { id: true, name: true, email: true }
+    });
+    return deleted;
   }
 }

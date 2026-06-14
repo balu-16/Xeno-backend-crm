@@ -26,10 +26,16 @@ export class SegmentsService {
       this.prisma.segment.count({ where })
     ]);
     const data = await Promise.all(
-      items.map(async (segment) => ({
-        ...segment,
-        audienceSize: await this.compiler.count(segment.rules)
-      }))
+      items.map(async (segment) => {
+        let audienceSize = 0;
+        try {
+          audienceSize = await this.compiler.count(segment.rules);
+        } catch {
+          // Segment has invalid rules (e.g. wrong field names or operators);
+          // return 0 so the page still loads instead of crashing.
+        }
+        return { ...segment, audienceSize };
+      })
     );
     return {
       data,

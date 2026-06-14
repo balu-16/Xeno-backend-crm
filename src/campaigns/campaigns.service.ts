@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import {
@@ -24,6 +25,8 @@ import { SegmentCompilerService } from "../segments/segment-compiler.service";
 
 @Injectable()
 export class CampaignsService {
+  private readonly logger = new Logger(CampaignsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly segments: SegmentCompilerService,
@@ -251,6 +254,17 @@ export class CampaignsService {
       ]);
       throw error;
     }
+
+    // Fire-and-forget: simulate the delivery lifecycle in the background
+    // so the campaign transitions RUNNING → COMPLETED with realistic funnel data.
+    this.simulateDeliveryLifecycle(id, audience, correlationId).catch(
+      (err) => {
+        this.logger.error(
+          `Delivery simulation failed for campaign ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      },
+    );
+
     return {
       campaignId: id,
       status: CampaignStatus.RUNNING,
@@ -520,5 +534,262 @@ export class CampaignsService {
     return typeof reason === "string" && reason.trim().length > 0
       ? reason
       : "Simulated failure";
+  }
+
+  /**
+   * Background simulation that generates realistic delivery funnel events
+   * over ~90 seconds, progressively updating analytics as each stage completes.
+   *
+   * Funnel stages (percentages of total audience):
+   *   SENT:       ~98%   (immediate)
+   *   DELIVERED:  ~95%   (+5s)
+   *   OPENED:     ~80%   (+20s)
+   *   CLICKED:    ~55%   (+25s)
+   *   CONVERTED:  ~25%   (+20s)
+   *   FAILED:     ~2%    (scattered)
+   *
+   * Each stage writes CampaignEvent + CampaignLog rows and calls
+   * analytics.refreshCampaign() so the frontend sees live percentage updates.
+   */
+  private async simulateDeliveryLifecycle(
+    campaignId: string,
+    audience: Array<{ id: string }>,
+    correlationId: string,
+  ): Promise<void> {
+    const total = audience.length;
+    if (total === 0) return;
+
+    // Shuffle audience for random selection at each stage
+    const shuffled = [...audience].sort(() => Math.random() - 0.5);
+
+    // Determine how many customers reach each stage (with some randomness)
+    const jitter = (base: number, variance: number) =>
+      Math.max(0, Math.min(total, Math.round(base + (Math.random() - 0.5) * variance * total)));
+
+    const sentCount = jitter(total * 0.98, 0.02);
+    const deliveredCount = jitter(total * 0.95, 0.03);
+    const openedCount = jitter(total * 0.80, 0.05);
+    const clickedCount = jitter(total * 0.55, 0.05);
+    const convertedCount = jitter(total * 0.25, 0.05);
+    const failedCount = total - sentCount;
+
+    // Pick subsets — each stage is a subset of the previous
+    const sentCustomers = shuffled.slice(0, sentCount);
+    const deliveredCustomers = sentCustomers.slice(0, deliveredCount);
+    const openedCustomers = deliveredCustomers.slice(0, openedCount);
+    const clickedCustomers = openedCustomers.slice(0, clickedCount);
+    const convertedCustomers = clickedCustomers.slice(0, convertedCount);
+    const failedCustomers = shuffled.slice(sentCount); // those not sent
+
+    // Helper: write events + update logs for a stage, then refresh analytics
+    const runStage = async (
+      stageName: string,
+      eventType: CampaignEventType,
+      status: DeliveryStatus,
+      customers: Array<{ id: string }>,
+      delayMs: number,
+      extraLogUpdate: Record<string, unknown> = {},
+    ) => {
+      if (customers.length === 0) {
+        await this.sleep(delayMs);
+        return;
+      }
+      const now = new Date();
+      await this.prisma.$transaction(async (tx) => {
+        await tx.campaignEvent.createMany({
+          data: customers.map((c) => ({
+            eventId: randomUUID(),
+            type: eventType,
+            campaignId,
+            customerId: c.id,
+            correlationId,
+            payload: toInputJson({ simulated: true }),
+            occurredAt: now,
+          })),
+        });
+        await tx.campaignLog.updateMany({
+          where: {
+            campaignId,
+            customerId: { in: customers.map((c) => c.id) },
+          },
+          data: { status, lastEventAt: now, ...extraLogUpdate },
+        });
+      });
+      await this.analytics.refreshCampaign(campaignId);
+      this.logger.log(
+        `Campaign ${campaignId}: ${stageName} ${customers.length}/${total}`,
+      );
+      await this.sleep(delayMs);
+    };
+
+    // Stage 1: SENT — immediate
+    await runStage(
+      "SENT",
+      CampaignEventType.MessageSent,
+      DeliveryStatus.SENT,
+      sentCustomers,
+      5_000, // wait 5s before next stage
+    );
+
+    // Stage 2: DELIVERED
+    await runStage(
+      "DELIVERED",
+      CampaignEventType.MessageDelivered,
+      DeliveryStatus.DELIVERED,
+      deliveredCustomers,
+      15_000, // wait 15s
+    );
+
+    // Stage 3: OPENED
+    await runStage(
+      "OPENED",
+      CampaignEventType.MessageOpened,
+      DeliveryStatus.OPENED,
+      openedCustomers,
+      20_000, // wait 20s
+    );
+
+    // Stage 4: CLICKED
+    await runStage(
+      "CLICKED",
+      CampaignEventType.MessageClicked,
+      DeliveryStatus.CLICKED,
+      clickedCustomers,
+      20_000, // wait 20s
+    );
+
+    // Stage 5: CONVERTED — create attributed orders
+    if (convertedCustomers.length > 0) {
+      const now = new Date();
+      await this.prisma.$transaction(async (tx) => {
+        // Create orders for converted customers
+        for (const c of convertedCustomers) {
+          const amount = Math.round(50 + Math.random() * 450); // ₹50–500
+          const order = await tx.order.create({
+            data: {
+              customerId: c.id,
+              amount,
+              items: toInputJson([
+                { sku: "CAMPAIGN-CONVERSION", quantity: 1 },
+              ]),
+              createdAt: now,
+            },
+          });
+          await tx.campaignEvent.create({
+            data: {
+              eventId: randomUUID(),
+              type: CampaignEventType.MessageConverted,
+              campaignId,
+              customerId: c.id,
+              attributedOrderId: order.id,
+              correlationId,
+              payload: toInputJson({
+                simulated: true,
+                orderAmount: amount,
+              }),
+              occurredAt: now,
+            },
+          });
+          await tx.campaignLog.update({
+            where: {
+              campaignId_customerId: { campaignId, customerId: c.id },
+            },
+            data: {
+              status: DeliveryStatus.CONVERTED,
+              attributedOrderId: order.id,
+              lastEventAt: now,
+            },
+          });
+        }
+      });
+      await this.analytics.refreshCampaign(campaignId);
+      this.logger.log(
+        `Campaign ${campaignId}: CONVERTED ${convertedCustomers.length}/${total}`,
+      );
+      await this.sleep(15_000);
+    }
+
+    // Stage 6: FAILED — mark failed customers
+    if (failedCustomers.length > 0) {
+      const now = new Date();
+      await this.prisma.$transaction(async (tx) => {
+        await tx.campaignEvent.createMany({
+          data: failedCustomers.map((c) => ({
+            eventId: randomUUID(),
+            type: CampaignEventType.MessageFailed,
+            campaignId,
+            customerId: c.id,
+            correlationId,
+            payload: toInputJson({
+              simulated: true,
+              reason: "Invalid or unreachable destination",
+            }),
+            occurredAt: now,
+          })),
+        });
+        await tx.campaignLog.updateMany({
+          where: {
+            campaignId,
+            customerId: { in: failedCustomers.map((c) => c.id) },
+          },
+          data: {
+            status: DeliveryStatus.FAILED,
+            failureReason: "Invalid or unreachable destination",
+            lastEventAt: now,
+          },
+        });
+      });
+    }
+
+    // Sweep: move any remaining QUEUED/SENT customers to terminal states
+    // so that pending count drops to 0 and the campaign can auto-complete.
+    const remainingQueued = await this.prisma.campaignLog.findMany({
+      where: { campaignId, status: DeliveryStatus.QUEUED },
+      select: { customerId: true },
+    });
+    if (remainingQueued.length > 0) {
+      const now = new Date();
+      await this.prisma.$transaction(async (tx) => {
+        await tx.campaignEvent.createMany({
+          data: remainingQueued.map((log) => ({
+            eventId: randomUUID(),
+            type: CampaignEventType.MessageFailed,
+            campaignId,
+            customerId: log.customerId,
+            correlationId,
+            payload: toInputJson({
+              simulated: true,
+              reason: "Message not dispatched",
+            }),
+            occurredAt: now,
+          })),
+        });
+        await tx.campaignLog.updateMany({
+          where: {
+            campaignId,
+            customerId: { in: remainingQueued.map((l) => l.customerId) },
+          },
+          data: {
+            status: DeliveryStatus.FAILED,
+            failureReason: "Message not dispatched",
+            lastEventAt: now,
+          },
+        });
+      });
+    }
+    // Mark remaining SENT customers as DELIVERED (sent but delivery not confirmed)
+    await this.prisma.campaignLog.updateMany({
+      where: { campaignId, status: DeliveryStatus.SENT },
+      data: { status: DeliveryStatus.DELIVERED, lastEventAt: new Date() },
+    });
+
+    // Final refresh — analytics.refreshCampaign auto-transitions to COMPLETED
+    // when pending count (QUEUED + SENT) reaches 0.
+    await this.analytics.refreshCampaign(campaignId);
+    this.logger.log(`Campaign ${campaignId}: COMPLETED`);
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

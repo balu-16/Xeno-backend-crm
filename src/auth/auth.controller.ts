@@ -1,12 +1,15 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
+  Param,
   Post,
   Req,
   Res,
-  UnauthorizedException
+  UnauthorizedException,
+  UseGuards
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Throttle } from "@nestjs/throttler";
@@ -15,6 +18,8 @@ import type { Request, Response } from "express";
 import type { Environment } from "../config/env";
 import type { AuthenticatedRequest } from "./auth.guard";
 import { Public } from "./auth.guard";
+import { Roles } from "./roles.decorator";
+import { RolesGuard } from "./roles.guard";
 import { AuthService, type AuthenticatedUser } from "./auth.service";
 
 class LoginDto {
@@ -62,28 +67,15 @@ export class AuthController {
   @Post("register")
   async register(
     @Body() input: RegisterDto,
-    @Req() request: Request,
-    @Res({ passthrough: true }) response: Response
-  ): Promise<{ user: Awaited<ReturnType<AuthService["register"]>>["user"] }> {
-    const result = await this.auth.register(
+    @Req() request: Request
+  ): Promise<{ pendingApproval: true; message: string }> {
+    return this.auth.register(
       input.name,
       input.email,
       input.password,
       request.ip,
       request.header("user-agent")
     );
-    const production =
-      this.config.get("NODE_ENV", { infer: true }) === "production";
-    const opts = this.cookieOptions(production);
-    response.cookie("xeno_access_token", result.token, {
-      ...opts,
-      maxAge: 8 * 60 * 60 * 1000
-    });
-    response.cookie("xeno_refresh_token", result.refreshToken, {
-      ...opts,
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-    return { user: result.user };
   }
 
   @Public()
@@ -172,6 +164,43 @@ export class AuthController {
   @Get("me")
   me(@Req() request: AuthenticatedRequest): { user: AuthenticatedRequest["user"] } {
     return { user: request.user };
+  }
+
+  @Get("managers/pending")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async pendingManagers() {
+    return { managers: await this.auth.getPendingManagers() };
+  }
+
+  @Get("managers")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async allManagers() {
+    return { managers: await this.auth.getAllManagers() };
+  }
+
+  @Post("managers/:id/approve")
+  @HttpCode(200)
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async approveManager(@Param("id") id: string) {
+    return { manager: await this.auth.approveManager(id) };
+  }
+
+  @Post("managers/:id/reject")
+  @HttpCode(200)
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async rejectManager(@Param("id") id: string) {
+    return { manager: await this.auth.rejectManager(id) };
+  }
+
+  @Delete("managers/:id")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async deleteManager(@Param("id") id: string) {
+    return { manager: await this.auth.deleteManager(id) };
   }
 
 }

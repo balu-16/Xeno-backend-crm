@@ -7,12 +7,16 @@ import {
 import { InsightActionStatus, InsightActionType } from "@prisma/client";
 import { toInputJson } from "../common/json";
 import { PrismaService } from "../prisma/prisma.service";
+import { SegmentCompilerService } from "../segments/segment-compiler.service";
 
 @Injectable()
 export class ActionService {
   private readonly logger = new Logger(ActionService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly segmentCompiler: SegmentCompilerService,
+  ) {}
 
   async createActions(
     insightId: string,
@@ -105,7 +109,8 @@ export class ActionService {
       switch (action.type) {
         case InsightActionType.GENERATE_SEGMENT: {
           const metadata = (action.metadata as Record<string, unknown>) ?? {};
-          const rules = metadata.rules ?? metadata.suggestedRules;
+          const rawRules = metadata.rules ?? metadata.suggestedRules;
+          const validatedRules = this.segmentCompiler.validate(rawRules ?? { operator: "AND", conditions: [{ field: "orderCount", operator: ">", value: 0 }] });
           const segmentName =
             (metadata.segmentName as string) ??
             `AI Segment - ${action.label}`;
@@ -113,7 +118,7 @@ export class ActionService {
             data: {
               name: segmentName,
               description: `Auto-generated from insight ${action.insightId}`,
-              rules: toInputJson(rules ?? {}),
+              rules: toInputJson(validatedRules),
             },
           });
           executedResult = {

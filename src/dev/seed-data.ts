@@ -152,7 +152,8 @@ export async function seedDatabase(
       name: "Xeno Evaluator",
       email: options.adminEmail.toLowerCase(),
       passwordHash: await hash(options.adminPassword),
-      role: "ADMIN"
+      role: "ADMIN",
+      approvalStatus: "APPROVED"
     }
   });
 
