@@ -1,5 +1,27 @@
 import { z } from "zod";
 
+/**
+ * For optional URL env vars: if the raw value is missing, empty, or not a
+ * valid URL, fall back to `defaultValue`.  This prevents Vercel's empty-string
+ * env vars (or stale "true"/"1" placeholders) from crashing the app.
+ */
+function optionalUrl(defaultValue: string) {
+  return z.preprocess(
+    (val) => {
+      if (val === undefined || val === null || val === "") return defaultValue;
+      const s = String(val).trim();
+      // Quick sanity check — if it doesn't look like a URL, use the default.
+      try {
+        new URL(s);
+        return s;
+      } catch {
+        return defaultValue;
+      }
+    },
+    z.string().url(),
+  );
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   CRM_PORT: z.coerce.number().int().positive().default(3000),
@@ -7,10 +29,10 @@ const envSchema = z.object({
   DIRECT_URL: z.string().min(1).optional(),
   JWT_SECRET: z.string().min(32).default("xeno-jwt-secret-default-change-me-in-production-32ch!"),
   JWT_EXPIRES_IN: z.string().default("8h"),
-  FRONTEND_URL: z.string().url().default("http://localhost:5173"),
+  FRONTEND_URL: optionalUrl("http://localhost:5173"),
   CHANNEL_WEBHOOK_SECRET: z.string().min(32).default("xeno-webhook-secret-default-change-me-in-production-32ch!"),
-  CHANNEL_SERVICE_URL: z.string().url().default("http://localhost:3001"),
-  ANTHROPIC_BASE_URL: z.string().url().default("https://api.anthropic.com"),
+  CHANNEL_SERVICE_URL: optionalUrl("http://localhost:3001"),
+  ANTHROPIC_BASE_URL: optionalUrl("https://api.anthropic.com"),
   XIAOMI_AUTH_TOKEN: z.string().min(1).default("placeholder"),
   XIAOMI_MODEL: z.string().default("mimo-v2.5-pro"),
   SEED_ADMIN_EMAIL: z.string().email().default("admin@xeno.local"),
@@ -27,13 +49,12 @@ function ensureConnectTimeout(url: string, seconds = 5): string {
 }
 
 export function validateEnvironment(config: Record<string, unknown>) {
-  // Strip empty strings so Zod defaults can kick in.
+  // Strip empty / whitespace-only strings so Zod defaults can kick in.
   // Vercel may set env vars to "" which bypasses .default() in Zod.
   const cleaned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config)) {
-    if (value !== "") {
-      cleaned[key] = value;
-    }
+    if (typeof value === "string" && value.trim() === "") continue;
+    cleaned[key] = value;
   }
 
   const rawDbUrl = cleaned.DATABASE_URL as string;
