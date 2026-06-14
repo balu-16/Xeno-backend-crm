@@ -10,15 +10,11 @@ function optionalUrl(defaultValue: string) {
     (val) => {
       if (val === undefined || val === null || val === "") return defaultValue;
       const s = String(val).trim();
-      // Quick sanity check — if it doesn't look like a URL, use the default.
-      try {
-        new URL(s);
-        return s;
-      } catch {
-        return defaultValue;
-      }
+      // Only accept values that look like absolute URLs with a scheme.
+      if (/^https?:\/\/.+/.test(s)) return s;
+      return defaultValue;
     },
-    z.string().url(),
+    z.string(),
   );
 }
 
