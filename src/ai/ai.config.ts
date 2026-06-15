@@ -17,7 +17,7 @@ export const AI_CONFIG = {
   MAX_INPUT_TOKENS: Number(process.env.AI_MAX_INPUT_TOKENS ?? 100_000),
 
   /** Maximum total tokens (input + output) per query */
-  MAX_TOKENS_PER_QUERY: Number(process.env.AI_MAX_TOKENS_PER_QUERY ?? 50_000),
+  MAX_TOKENS_PER_QUERY: Number(process.env.AI_MAX_TOKENS_PER_QUERY ?? 150_000),
 
   /** Confirmation TTL in milliseconds */
   CONFIRMATION_TTL_MS: Number(process.env.AI_CONFIRMATION_TTL_MS ?? 15 * 60 * 1000),
